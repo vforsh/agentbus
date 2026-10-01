@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { Store } from "../harness.ts";
 
@@ -97,6 +97,29 @@ describe("delegate", () => {
     expect(statSync(out).mode & 0o777).toBe(0o600);
   });
 
+  test("Claude workers get a private per-worker hook settings file; Codex workers do not", () => {
+    const d = delegate("Hooked worker", ["--key", "hooked"]);
+    expect(d.claudeSettings).toBe(join(s.stateDir, "workers", d.workerId, "claude-settings.json"));
+    expect(statSync(d.claudeSettings).mode & 0o777).toBe(0o600);
+    const settings = JSON.parse(readFileSync(d.claudeSettings, "utf8"));
+    expect(Object.keys(settings.hooks).sort()).toEqual([
+      "PermissionRequest",
+      "SessionEnd",
+      "SessionStart",
+      "Stop",
+      "StopFailure",
+      "UserPromptSubmit",
+    ]);
+    expect(settings.hooks.Stop[0].hooks[0].command).toContain(`--state-dir ${s.stateDir}`);
+    // A keyed retry recreates a missing file without creating another worker.
+    rmSync(d.claudeSettings);
+    expect(delegate("Hooked worker", ["--key", "hooked"]).workerId).toBe(d.workerId);
+    expect(existsSync(d.claudeSettings)).toBe(true);
+    const codex = s.ok(["delegate", "--to", "codex", "--file", "-"], { as: LEAD, input: "codex" });
+    expect(codex.claudeSettings).toBeNull();
+    expect(existsSync(join(s.stateDir, "workers", codex.workerId))).toBe(false);
+  });
+
   test("dry-run prints the contract with preview IDs and writes nothing", () => {
     const before = s.sql("SELECT count(*) AS n FROM messages")[0].n;
     const out = join(s.dir, "dry.md");
@@ -106,6 +129,7 @@ describe("delegate", () => {
     });
     expect(r.dryRun).toBe(true);
     expect(r.workerId).toStartWith("preview-");
+    expect(existsSync(join(s.stateDir, "workers", r.workerId))).toBe(false);
     expect(s.sql("SELECT count(*) AS n FROM messages")[0].n).toBe(before);
     expect(existsSync(out)).toBe(false);
   });

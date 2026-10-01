@@ -3,11 +3,12 @@ import pc from "picocolors";
 import {
   applySettings,
   HOOK_EVENTS,
-  hookEntry,
   hookStatus,
+  hooksSettings,
   loadSettings,
   planInstall,
   planUninstall,
+  writeHooksSettings,
 } from "../../adapters/claude/settings.ts";
 import { action } from "../action.ts";
 
@@ -15,23 +16,30 @@ export function registerHooks(program: Command): void {
   const hooks = program.command("hooks").description("Provider hook management");
   const claude = hooks
     .command("claude")
-    .description("User-level Claude Code hooks (~/.claude/settings.json)");
+    .description("Claude Code hooks: per-worker settings files (default) or an optional user-level install");
 
   claude
     .command("print")
-    .description("Print the settings snippet with this store's pinned paths")
+    .description("Print the hook settings with this store's pinned paths, or write them to a file")
+    .option("--settings-file <path>", "write a standalone settings file for `claude --settings <path>`")
     .action(
-      action((ctx) => {
-        const snippet = {
-          hooks: Object.fromEntries(HOOK_EVENTS.map((e) => [e, [{ hooks: [hookEntry(ctx.paths, e)] }]])),
-        };
-        ctx.emit(snippet, () => JSON.stringify(snippet, null, 2));
+      action((ctx, opts: { settingsFile?: string }) => {
+        const settings = hooksSettings(ctx.paths);
+        if (opts.settingsFile) {
+          writeHooksSettings(opts.settingsFile, ctx.paths);
+          ctx.emit(
+            { settingsFile: opts.settingsFile },
+            () => `Wrote Agentbus hook settings to ${opts.settingsFile}`,
+          );
+          return;
+        }
+        ctx.emit(settings, () => JSON.stringify(settings, null, 2));
       }),
     );
 
   claude
     .command("install")
-    .description("Merge Agentbus hooks into Claude user settings (idempotent, with a private backup)")
+    .description("Optional: merge Agentbus hooks into Claude user settings, affecting every session")
     .option("--dry-run", "describe the change without writing")
     .action(
       action((ctx, opts: { dryRun?: boolean }) => {

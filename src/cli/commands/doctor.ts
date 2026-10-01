@@ -134,15 +134,19 @@ function runChecks(opts: { config?: string; stateDir?: string; as?: string }): C
         "reinstall hooks with the intended --state-dir, or select the pinned store",
       );
     } else if (hs.current) {
-      add("claude_hooks", "ok", `installed in ${hs.settingsPath}`);
-    } else {
+      add("claude_hooks", "ok", `user-level hooks installed in ${hs.settingsPath}`);
+    } else if (Object.values(hs.events).some((e) => e.entries > 0)) {
       add(
         "claude_hooks",
         "warn",
-        hs.installed
-          ? `installed but not current in ${hs.settingsPath}`
-          : `not installed in ${hs.settingsPath}`,
-        "run `agentbus hooks claude install` to capture Claude worker turns",
+        `user-level hooks in ${hs.settingsPath} are not current`,
+        "run `agentbus hooks claude install` again, or `uninstall` to rely on per-worker hooks",
+      );
+    } else {
+      add(
+        "claude_hooks",
+        "ok",
+        "per-worker hooks (delegate writes a --settings file for each Claude worker)",
       );
     }
   } catch (err) {

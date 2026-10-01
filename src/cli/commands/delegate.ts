@@ -1,5 +1,6 @@
 import type { Command } from "commander";
 import pc from "picocolors";
+import { workerSettingsPath, writeHooksSettings } from "../../adapters/claude/settings.ts";
 import { AgentbusError, EXIT, usageError } from "../../errors.ts";
 import { CONTRACT_VERSION, renderContract } from "../../protocol/contract.ts";
 import { BODY_LIMIT, type Provider } from "../../protocol/types.ts";
@@ -103,7 +104,21 @@ export function registerDelegate(program: Command): void {
             contractVersion: r.delegation.contract_version,
             contract: r.delegation.contract,
             contractOut: opts.contractOut ?? null,
+            // Claude workers get Agentbus hooks only through this file: `claude --bg --settings <file>`.
+            claudeSettings: provider === "claude" ? workerSettingsPath(ctx.paths, r.worker.id) : null,
           };
+          if (data.claudeSettings) {
+            try {
+              writeHooksSettings(data.claudeSettings, ctx.paths);
+            } catch (err) {
+              throw new AgentbusError(
+                "worker_settings_write_failed",
+                `Delegation committed but the worker hook settings could not be written: ${(err as Error).message}`,
+                EXIT.failure,
+                { workerId: r.worker.id, requestId: r.request.id, claudeSettings: data.claudeSettings },
+              );
+            }
+          }
           if (opts.contractOut) {
             try {
               writeFileAtomic(opts.contractOut, `${r.delegation.contract ?? ""}\n`);

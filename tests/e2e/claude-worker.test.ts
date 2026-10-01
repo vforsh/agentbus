@@ -1,7 +1,7 @@
 // Claude worker lifecycle driven by recorded hook payloads through the silent hook entry point.
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { copyFileSync, existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fixture, Store, type Store as StoreT, sleep, uuid } from "../harness.ts";
 
@@ -98,6 +98,47 @@ describe("unregistered and pending sessions", () => {
 });
 
 describe("delegated turn capture", () => {
+  test("the hook command from the per-worker settings file captures the worker's turn", () => {
+    const d = s.ok(
+      ["delegate", "--to", "claude", "--cwd", project, "--name", "via-settings", "--file", "-"],
+      {
+        as: LEAD,
+        input: "via settings",
+      },
+    );
+    const settings = JSON.parse(readFileSync(d.claudeSettings, "utf8"));
+    const run = (event: string, payload: Record<string, unknown>) => {
+      const command = settings.hooks[event][0].hooks[0].command as string;
+      const r = Bun.spawnSync(["sh", "-c", command], {
+        env: s.env({ AGENTBUS_STATE_DIR: undefined, AGENTBUS_CONFIG: undefined }),
+        stdin: Buffer.from(JSON.stringify(payload)),
+        stdout: "pipe",
+      });
+      expect(r.exitCode).toBe(0);
+      expect(r.stdout.toString()).toBe("");
+    };
+    const sid = uuid();
+    const prompt = uuid();
+    run("UserPromptSubmit", {
+      session_id: sid,
+      hook_event_name: "UserPromptSubmit",
+      prompt_id: prompt,
+      cwd: project,
+      prompt: d.contract,
+    });
+    run("Stop", {
+      session_id: sid,
+      hook_event_name: "Stop",
+      prompt_id: prompt,
+      cwd: project,
+      last_assistant_message: "via file",
+      background_tasks: [],
+    });
+    expect(s.ok(["session", "show", d.workerId]).session.externalId).toBe(sid);
+    const n = s.ok(["read", "--correlation", d.requestId, "--type", "notice"], { as: LEAD }).messages;
+    expect(n.map((m: any) => m.body)).toEqual(["via file"]);
+  });
+
   test("a contract prompt claims the pending worker; Stop posts the final response as a notice", () => {
     const w = delegateClaude("finisher");
     s.hook(base(w, "SessionStart"));

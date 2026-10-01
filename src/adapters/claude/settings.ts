@@ -1,7 +1,10 @@
-// User-level Claude hook installation: idempotent merge into ~/.claude/settings.json that preserves
-// unrelated entries, writes a private backup, and refuses malformed or concurrently edited files.
+// Claude hook entries. The default mode is per worker: `delegate --to claude` writes a standalone
+// settings file that the launcher passes to `claude --bg --settings`, so only Agentbus workers run the
+// hooks. The optional user-level install merges the same entries into ~/.claude/settings.json,
+// idempotently, with a private backup, refusing malformed or concurrently edited files.
 
 import { readFileSync, statSync } from "node:fs";
+import { join } from "node:path";
 import type { Resolved } from "../../config/config.ts";
 import { shellQuote } from "../../config/config.ts";
 import { conflict, failure } from "../../errors.ts";
@@ -31,6 +34,19 @@ export function hookCommand(paths: Resolved): string {
 
 export function hookEntry(paths: Resolved, event: string): Json {
   return { type: "command", command: hookCommand(paths), timeout: event === "SessionEnd" ? 5 : 10 };
+}
+
+/** Standalone settings carrying only the Agentbus hooks, for `claude --settings <file>`. */
+export function hooksSettings(paths: Resolved): Json {
+  return { hooks: Object.fromEntries(HOOK_EVENTS.map((e) => [e, [{ hooks: [hookEntry(paths, e)] }]])) };
+}
+
+export const workerSettingsPath = (paths: Resolved, workerId: string): string =>
+  join(paths.stateDir, "workers", workerId, "claude-settings.json");
+
+/** Writes (or rewrites) a worker's private settings file atomically; safe to repeat on keyed retries. */
+export function writeHooksSettings(path: string, paths: Resolved): void {
+  writeFileAtomic(path, `${JSON.stringify(hooksSettings(paths), null, 2)}\n`, 0o600);
 }
 
 const isOurs = (h: unknown): boolean =>

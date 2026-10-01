@@ -158,6 +158,17 @@ describe("claude hook installation", () => {
     expect(s.run(["hooks", "claude", "status"]).code).toBe(1);
   });
 
+  test("per-worker mode needs no user-level install; print can write a standalone file", () => {
+    const s = fresh().init();
+    const doctor = s.run(["doctor"]).json?.data.checks.find((c: any) => c.name === "claude_hooks");
+    expect(doctor).toMatchObject({ status: "ok" });
+    expect(doctor.message).toContain("per-worker");
+    const file = join(s.dir, "worker-settings.json");
+    s.ok(["hooks", "claude", "print", "--settings-file", file]);
+    expect(Object.keys(JSON.parse(readFileSync(file, "utf8")).hooks)).toHaveLength(6);
+    expect(existsSync(s.settingsPath)).toBe(false);
+  });
+
   test("malformed settings are left unchanged", () => {
     const s = fresh();
     writeFileSync(s.settingsPath, "{ not json");
