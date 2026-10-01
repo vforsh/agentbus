@@ -1,0 +1,112 @@
+[
+  {
+    "id": "f000001d",
+    "cwd": "/redacted",
+    "kind": "background",
+    "startedAt": 1790005700427,
+    "sessionId": "f000001d-0000-4000-8000-00000000001d",
+    "name": "redacted",
+    "state": "done"
+  },
+  {
+    "id": "f000001a",
+    "cwd": "/redacted",
+    "kind": "background",
+    "startedAt": 1790006361141,
+    "sessionId": "f000001a-0000-4000-8000-00000000001a",
+    "name": "redacted",
+    "state": "done"
+  },
+  {
+    "id": "f0000026",
+    "cwd": "/redacted",
+    "kind": "background",
+    "startedAt": 1790006606910,
+    "sessionId": "f0000026-0000-4000-8000-000000000026",
+    "name": "redacted",
+    "state": "done"
+  },
+  {
+    "id": "f000001c",
+    "cwd": "/redacted",
+    "kind": "background",
+    "startedAt": 1790239251289,
+    "sessionId": "f000001c-0000-4000-8000-00000000001c",
+    "name": "redacted",
+    "state": "stopped"
+  },
+  {
+    "id": "f0000021",
+    "cwd": "/redacted",
+    "kind": "background",
+    "startedAt": 1790239396548,
+    "sessionId": "f0000021-0000-4000-8000-000000000021",
+    "name": "redacted",
+    "state": "done"
+  },
+  {
+    "pid": 46987,
+    "cwd": "/redacted",
+    "kind": "interactive",
+    "startedAt": 1790260150063,
+    "sessionId": "f0000019-0000-4000-8000-000000000019",
+    "name": "redacted",
+    "status": "idle"
+  },
+  {
+    "pid": 3653,
+    "cwd": "/redacted",
+    "kind": "interactive",
+    "startedAt": 1790265356480,
+    "sessionId": "f0000018-0000-4000-8000-000000000018",
+    "name": "redacted",
+    "status": "idle"
+  },
+  {
+    "pid": 8615,
+    "cwd": "/redacted",
+    "kind": "interactive",
+    "startedAt": 1790265975731,
+    "sessionId": "f000002c-0000-4000-8000-00000000002c",
+    "name": "redacted",
+    "status": "idle"
+  },
+  {
+    "pid": 4078,
+    "id": "f0000023",
+    "cwd": "/redacted",
+    "kind": "background",
+    "startedAt": 1790366288969,
+    "sessionId": "f0000023-0000-4000-8000-000000000023",
+    "name": "redacted",
+    "status": "idle",
+    "state": "done"
+  },
+  {
+    "pid": 56454,
+    "cwd": "/redacted",
+    "kind": "interactive",
+    "startedAt": 1790371153331,
+    "sessionId": "f0000014-0000-4000-8000-000000000014",
+    "name": "redacted",
+    "status": "idle"
+  },
+  {
+    "pid": 29675,
+    "cwd": "/redacted",
+    "kind": "interactive",
+    "startedAt": 1790418316137,
+    "sessionId": "f000002a-0000-4000-8000-00000000002a",
+    "name": "redacted",
+    "status": "idle"
+  },
+  {
+    "id": "f0000013",
+    "cwd": "/redacted",
+    "kind": "background",
+    "startedAt": 1790446930123,
+    "sessionId": "f0000013-0000-4000-8000-000000000013",
+    "name": "redacted",
+    "state": "done"
+  }
+]

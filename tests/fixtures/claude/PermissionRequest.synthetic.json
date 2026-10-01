@@ -1,0 +1,14 @@
+{
+  "_fixture": "synthetic: shape from the Claude hooks reference (PermissionRequest input); tool_use_id may be absent in real payloads",
+  "session_id": "f000001f-0000-4000-8000-00000000001f",
+  "prompt_id": "f0000024-0000-4000-8000-000000000024",
+  "transcript_path": "/redacted/transcript.jsonl",
+  "cwd": "/workspace/agentbus",
+  "permission_mode": "default",
+  "hook_event_name": "PermissionRequest",
+  "tool_name": "Bash",
+  "tool_input": {
+    "command": "curl -H 'Authorization: Bearer SECRET' https://example.com",
+    "description": "Fetch the status page"
+  }
+}

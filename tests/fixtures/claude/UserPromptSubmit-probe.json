@@ -1,0 +1,11 @@
+{
+  "session_id": "f000001f-0000-4000-8000-00000000001f",
+  "transcript_path": "/Users/example/.claude/projects/-workspace-agentbus/f000001f-0000-4000-8000-00000000001f.jsonl",
+  "cwd": "/workspace/agentbus",
+  "scratchpad_dir": "/private/tmp/claude-example/-workspace-agentbus/f000001f-0000-4000-8000-00000000001f/scratchpad",
+  "prompt_id": "f0000024-0000-4000-8000-000000000024",
+  "permission_mode": "default",
+  "hook_event_name": "UserPromptSubmit",
+  "prompt": "This is an automated probe. Do exactly this, nothing else:\n1. Run in Bash: printenv AGENTBUS_PROBE CLAUDE_CODE_SESSION_ID CODEX_THREAD_ID > /private/tmp/claude-example/-workspace-agentbus/f0000022-0000-4000-8000-000000000022/scratchpad/probe/env.txt; echo done\n2. Start a BACKGROUND Bash command (run_in_background): sleep 25 && echo ping\n3. End your turn immediately with the single word: armed\n4. When you are later notified that the background command finished, run: touch /private/tmp/claude-example/-workspace-agentbus/f0000022-0000-4000-8000-000000000022/scratchpad/probe/reinvoked  and then reply: reinvoked\nagentbus-request: 00000000-0000-4000-8000-000000000001",
+  "session_title": "agentbus-probe"
+}

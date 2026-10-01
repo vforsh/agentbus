@@ -1,0 +1,39 @@
+[
+  {
+    "session_id": "f0000001-0000-4000-8000-000000000001",
+    "transcript_path": "/Users/example/.codex/sessions/2026/09/30/rollout-2026-09-30T18-11-12-f0000001-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/private/tmp/claude-example/-workspace-agentbus/f0000022-0000-4000-8000-000000000022/scratchpad/cxprobe",
+    "hook_event_name": "SessionStart",
+    "model": "gpt-6-luna",
+    "permission_mode": "bypassPermissions",
+    "source": "startup"
+  },
+  {
+    "session_id": "f0000001-0000-4000-8000-000000000001",
+    "turn_id": "f0000002-0000-4000-8000-000000000002",
+    "transcript_path": "/Users/example/.codex/sessions/2026/09/30/rollout-2026-09-30T18-11-12-f0000001-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/private/tmp/claude-example/-workspace-agentbus/f0000022-0000-4000-8000-000000000022/scratchpad/cxprobe",
+    "hook_event_name": "UserPromptSubmit",
+    "model": "gpt-6-luna",
+    "permission_mode": "bypassPermissions",
+    "prompt": "Automated probe. Reply with the single word: ok. agentbus-request: 00000000-0000-4000-8000-000000000003"
+  },
+  {
+    "session_id": "f0000001-0000-4000-8000-000000000001",
+    "turn_id": "f0000002-0000-4000-8000-000000000002",
+    "transcript_path": "/Users/example/.codex/sessions/2026/09/30/rollout-2026-09-30T18-11-12-f0000001-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/private/tmp/claude-example/-workspace-agentbus/f0000022-0000-4000-8000-000000000022/scratchpad/cxprobe",
+    "hook_event_name": "Stop",
+    "model": "gpt-6-luna",
+    "permission_mode": "bypassPermissions",
+    "stop_hook_active": false,
+    "last_assistant_message": "ok"
+  },
+  {
+    "session_id": "f0000001-0000-4000-8000-000000000001",
+    "transcript_path": "/Users/example/.codex/sessions/2026/09/30/rollout-2026-09-30T18-11-12-f0000001-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/private/tmp/claude-example/-workspace-agentbus/f0000022-0000-4000-8000-000000000022/scratchpad/cxprobe",
+    "hook_event_name": "SessionEnd",
+    "reason": "other"
+  }
+]
