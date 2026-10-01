@@ -1,6 +1,6 @@
 # Agentbus implementation plan
 
-Status: milestones 1–3 implemented on 2026-10-01; milestone 4 launchers integrated, Claude→Codex live gate passed; the Codex→Claude heartbeat gate (needs the Codex app) and the Claude Desktop resume checks remain open (see README). Provider experiments below are evidence for individual primitives, not completed end-to-end acceptance.
+Status: milestones 1–3 implemented on 2026-10-01; milestone 4 launchers integrated, Claude→Codex live gate passed; milestone 5 (`claude-threads` on Agentbus) implemented with its live gate passed; the Codex→Claude heartbeat gate (needs the Codex app) and the Claude Desktop resume checks remain open (see README). Provider experiments below are evidence for individual primitives, not completed end-to-end acceptance.
 
 Agentbus is a local CLI for communication between agent sessions. It supports delegation in every direction between Codex and Claude Code:
 
@@ -849,10 +849,22 @@ The following experiments were recorded by the earlier plan on 2026-09-30 with C
 | Live gate 2026-10-01, Claude→Codex (Codex CLI 0.157.1, `gpt-6-luna`/low) through tracked `claude-to-codex` | The Codex worker asked a question and ended its run; this Claude parent's background `agentbus wait` re-invoked it; the answer was delivered with `spawn.sh --resume`, which kept the thread ID; a second wake-up delivered `result/success`; all launcher locks were released | Acceptance criterion 10 met for Claude→Codex |
 | Fake-codex runner checks | Retry of the same task recovered the launch instead of starting another run; a concurrent resume was refused by the thread lock; a resume after `desktopOpenRequested` was refused; runner `kill -9` with a live child → `tracking_lost`, then both dead → `turn_interrupted` | Launch, resume and Desktop ownership guards behave as specified |
 | Same run: `kill -9` of the owner (`claude bg-spare`) | No hook fired; the `claude agents` row stayed `state: working` with no `pid` or `status`; the probe's recorded PID+start identity confirmed death → `turn_interrupted` | Provider state goes stale after a crash; identity-based probes are required |
+| Live gate 2026-10-01, `claude-threads` on Agentbus (seven Haiku `--bg` children, one lead `wait --replace --probe 60s`) | Phases matched each child; question → answer → child's own wait → result posted no `turn_finished`; a child spawned after arming (in a `claude --worktree` worktree) reported to the same watcher; probe-confirmed death of a killed idle owner → `turn_interrupted` with no hook; `cleanup.sh rm` removed sessions, worktrees and branches and closed open delegations | Acceptance criteria 13–14 met |
+| Same run: `kill -9` of background owners (idle with an armed wait, and mid-turn at a permission prompt; four repeated kills) | The daemon respawned every owner within seconds: same session, new PID, `SessionStart source=resume`, same `--settings`; mid-turn it resumed the turn and re-raised the permission prompt. The respawned owner did not adopt the old owner's background tasks (`inFlight.tasks: 0`); the orphaned wait consumed the parent's answer and the child was never re-invoked. A `SendMessage` doorbell made the child read its answer and publish its result (that turn: `tracking_lost`, unattributed prompt) | A resumed owner with outstanding background work in the bound turn posts `tracking_lost` (phase `unknown`), which a live-owner probe does not repair; the earlier "stale row after `kill -9`" observation is not reproducible today, so a probe-confirmed death may be followed by a respawn |
+| Same run: `claude --bg --worktree <name>` | Creates `<root>/.claude/worktrees/<name>` on branch `worktree-<name>`; `claude agents` lists the launch directory for a moment first; `claude rm` removes worktree and branch | `delegate --allow-missing-cwd` lets launchers delegate the final worktree directory before it exists |
 
 `claude-threads` documents further facts verified with Claude desktop 2.16120: model-classified `done`/`blocked`/`working` states, `notify_when_idle` arriving late, and edit refusals in shared checkouts. They informed the phase model and the decision to keep the isolation rule in the skill.
 
 ## Revision log
+
+2026-10-01, milestone 5 (`claude-threads` on Agentbus):
+
+- `claude-threads` launches through `delegate` with labels, launch manifests and locks, the contract plus a `<thread-rules>` isolation rule, per-worker `--settings` and `session bind`; `cleanup.sh` resolves children through `delegations --json` and `rm` closes their delegations. `threads.py`, `wait.sh` and `status.sh` are gone (scripts about 980 → 630 lines); rollback tag `claude-threads-v1-registry` in agent-skills.
+- `wait --replace` enforces one watcher per session: a superseded wait exits with `reason: superseded` without claiming mail (checked inside the claiming transaction).
+- `delegate --allow-missing-cwd` resolves a directory a launcher creates later (`claude --worktree`) through its nearest existing ancestor, so the contract claim still checks the exact final path.
+- `delegations` views carry `worker {externalId, shortId, cwd}` for launcher scripts.
+- A Claude `SessionStart source=resume` while the bound turn's background work is outstanding posts `tracking_lost`: the respawned owner does not adopt the previous owner's tasks. Recovery is a provider-native doorbell from the lead.
+- Review fixes: a tracking loss recorded by a probe in the respawn window is converted to the permanent orphaned-wait loss on resume; the Claude worker contract arms its wait with `--replace`, so a re-armed wait retires an orphan; a superseded wake tells the consumer not to re-arm. In `claude-threads`: worktree refusal before delegating, key over the resolved directory, reconciliation of interrupted launches (relaunch only when the launcher positively ended and no session of that name started), re-read under the lock, and probe-guarded `cleanup --settled`.
 
 2026-10-01, milestone 4 launchers:
 

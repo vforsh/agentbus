@@ -30,19 +30,19 @@ agentbus delegate --to codex --name executor --cwd /abs/project --key task-001 \
 # -> workerId, requestId, contract, returnPath, returnPathStatus=setup_required
 ```
 
-Launchers (`claude-to-codex`, `codex-to-claude`, `claude-threads`) append `contract` to the worker prompt, spawn the worker (Claude workers with `--settings <claudeSettings>`), then confirm with `agentbus session bind <workerId> --external-id <native-uuid>`. Do not spawn twice for one request; a crash after spawning needs reconciliation, not a second launch.
+Launchers (`claude-to-codex`, `codex-to-claude`, `claude-threads`) append `contract` to the worker prompt (a worker directory the launcher creates later, such as a `claude --worktree`, is delegated with `--allow-missing-cwd`), spawn the worker (Claude workers with `--settings <claudeSettings>`), then confirm with `agentbus session bind <workerId> --external-id <native-uuid>`. Do not spawn twice for one request; a crash after spawning needs reconciliation, not a second launch.
 
 **Claude parent — one background wait for everything.** After delegating, run as a background command and end the turn:
 
 ```bash
-agentbus wait --timeout 30m --probe 60s --json
+agentbus wait --replace --timeout 30m --probe 60s --json
 ```
 
-It covers every delegation of this parent, including ones created later. On each re-invocation: recovery `read` sweep → handle questions/results/notices → `ack` what you handled → re-arm only if delegations remain open. Exactly one watcher per session. Record the armed mechanism: `agentbus session update <me> --binding-file rb.json` with `{"strategy":"background_wait","status":"ready"}`.
+It covers every delegation of this parent, including ones created later. On each re-invocation: recovery `read` sweep → handle questions/results/notices → `ack` what you handled → re-arm only if delegations remain open. Exactly one watcher per session: arm with `--replace` to retire an earlier one; a wake with `reason: superseded` means a newer watcher is running — handle nothing and do not re-arm. Subagents share the session's identity, so only the conversation itself arms the watcher. Record the armed mechanism: `agentbus session update <me> --binding-file rb.json` with `{"strategy":"background_wait","status":"ready"}`.
 
 **Codex parent — heartbeat.** If the app's automation tool exists and monitoring is in scope, create or reuse one heartbeat on the original chat (persist its ID). Its static prompt: run the recovery `read` sweep, optionally a short `wait --timeout 2m`, report only real changes (question, result, attention notice), ack handled mail, stay quiet otherwise. Delete it after all delegations are closed and handled. Without the tool, say delivery is manual and poll with `agentbus read`.
 
-**Batches.** `agentbus wait --settled --timeout 30m --json` snapshots currently open delegations: returns `reason: attention` immediately for questions and permission/failure/interruption/tracking-loss notices, `reason: settled` when every member is done/closed/idle, `reason: empty` if none were open. Answer attention items before re-arming.
+**Batches.** `agentbus wait --settled --replace --timeout 30m --json` snapshots currently open delegations: returns `reason: attention` immediately for questions and permission/failure/interruption/tracking-loss notices, `reason: settled` when every member is done/closed/idle, `reason: empty` if none were open. Answer attention items before re-arming.
 
 **Answering a question.** `agentbus reply <question-id> --key answer-<question-id> --file answer.md`. Acking a question does not answer it. Claude workers wake through their own background wait; for a Codex worker whose run ended, resume the same thread through the launcher (`spawn.sh --resume <threadId>`), never while its run is active or after Desktop may own it.
 
@@ -56,7 +56,7 @@ It covers every delegation of this parent, including ones created later. On each
 | `question` | Worker asked; unresolved until you reply to that question ID | Answer |
 | `idle` | Turn ended without a result | Read the `turn_finished` notice; follow up or close |
 | `interrupted` | Latest turn failed or its process positively died | Decide: retry with a fresh request or close |
-| `unknown` | Tracking lost or binding superseded by manual input | Investigate; do not take over files |
+| `unknown` | Tracking lost, binding superseded by manual input, or the worker's owner restarted and orphaned its background wait | Investigate; do not take over files. Restarted owner: nudge the worker through its provider (Claude: `SendMessage`) to run its contract's read command |
 | `done` | Worker published a result (outcome shown) | Verify the worker is idle before editing its files |
 | `closed` | Closed by the parent | — |
 
@@ -66,7 +66,7 @@ Your prompt carries an `<agentbus-contract version="1">` block. Follow it exactl
 
 1. `read --correlation <request-id> --json`, then `ack <request-id>`.
 2. Optional `reply <request-id> --type progress --summary ...` at real milestones only.
-3. Decision or blocker within the task's authorization → `reply <request-id> --type question --key q1-... --summary ... --file -`; one open question at a time. Recover an already-arrived answer with `read` before waiting. Claude: arm `wait --correlation <request-id> --timeout 30m --json` as a background command and end the turn; on every re-invocation recover, ack, re-arm if still waiting. Codex: bounded in-turn `wait`, or end the turn.
+3. Decision or blocker within the task's authorization → `reply <request-id> --type question --key q1-... --summary ... --file -`; one open question at a time. Recover an already-arrived answer with `read` before waiting. Claude: arm `wait --replace --correlation <request-id> --timeout 30m --json` as a background command and end the turn; on every re-invocation recover, ack, re-arm if still waiting. Codex: bounded in-turn `wait`, or end the turn.
 4. Finish all writes and background edits, then `reply <request-id> --type result --outcome <success|blocked|failed|unknown> --key result-... --summary ... --file -` and end the turn promptly. `blocked` hands the task back.
 5. Never message the parent through provider-native channels. Provider permission prompts still belong to the user.
 
