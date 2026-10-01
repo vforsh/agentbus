@@ -1,11 +1,11 @@
 import { Database } from "bun:sqlite";
-import { readFileSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { readdirSync, readFileSync, statSync } from "node:fs";
+import { dirname, join } from "node:path";
 import type { Command } from "commander";
 import pc from "picocolors";
 import { hookStatus } from "../../adapters/claude/settings.ts";
 import { spoolCounts } from "../../adapters/claude/spool.ts";
-import { type Resolved, resolvePaths } from "../../config/config.ts";
+import { installedBinPath, type Resolved, resolvePaths, SOURCE_ENTRY } from "../../config/config.ts";
 import { resolveCallerRef } from "../../services/caller.ts";
 import { readSchemaVersion, SCHEMA_VERSION } from "../../store/db.ts";
 import { fileExists, modeOf } from "../../util/fsx.ts";
@@ -153,6 +153,28 @@ function runChecks(opts: { config?: string; stateDir?: string; as?: string }): C
     add("claude_hooks", "warn", (err as Error).message);
   }
 
+  const workerCli = paths.cliArgv ?? [paths.cliCommand];
+  const external = workerCli.find((p) => p.startsWith("/Volumes/"));
+  const installed = installedBinPath();
+  if (external) {
+    add(
+      "worker_cli",
+      "warn",
+      `workers run ${external}, on an external volume`,
+      "background Claude sessions can be denied reads there; run `bun run install:bin` in the checkout",
+    );
+  } else if (paths.cliArgv?.[0] === installed && fileExists(installed)) {
+    const stale = newestSourceMtime() > statSync(installed).mtimeMs;
+    add(
+      "worker_cli",
+      stale ? "warn" : "ok",
+      `workers run ${installed}`,
+      stale ? "the checkout changed since it was built; run `bun run install:bin` again" : undefined,
+    );
+  } else {
+    add("worker_cli", "ok", `workers run ${paths.cliCommand}`);
+  }
+
   for (const [name, bin] of [
     ["claude_cli", paths.claudeBin],
     ["codex_cli", paths.codexBin],
@@ -185,6 +207,22 @@ const STATUS_TAG: Record<Status, () => string> = {
   warn: () => pc.yellow("WARN"),
   fail: () => pc.red("FAIL"),
 };
+
+function newestSourceMtime(): number {
+  const root = dirname(SOURCE_ENTRY);
+  let newest = 0;
+  const walk = (dir: string) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const full = join(dir, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else newest = Math.max(newest, statSync(full).mtimeMs);
+    }
+  };
+  try {
+    walk(root);
+  } catch {}
+  return newest;
+}
 
 function overallStatus(checks: Check[]): Status {
   if (checks.some((c) => c.status === "fail")) return "fail";

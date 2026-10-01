@@ -22,13 +22,17 @@ export const HOOK_MARKER = "# agentbus-hook v1";
 
 type Json = Record<string, unknown>;
 
-/** Guarded shell command: a missing runtime or unmounted checkout is a silent no-op; always exits 0. */
+/** Guarded shell command: a missing executable or unmounted checkout is a silent no-op; always exits 0. */
 export function hookCommand(paths: Resolved): string {
-  const bun = shellQuote(process.execPath);
-  const bin = shellQuote(paths.binPath);
+  const argv = paths.cliArgv;
+  const guard = argv
+    ? [`[ -x ${shellQuote(argv[0]!)} ]`, ...argv.slice(1).map((a) => `[ -f ${shellQuote(a)} ]`)].join(
+        " && ",
+      ) + " && "
+    : "";
   return (
-    `[ -x ${bun} ] && [ -f ${bin} ] && ${bun} ${bin} --state-dir ${shellQuote(paths.stateDir)} ` +
-    `--config ${shellQuote(paths.configPath)} event ingest --provider claude --source hook >/dev/null 2>&1; exit 0 ${HOOK_MARKER}`
+    `${guard}${paths.cliCommand} --state-dir ${shellQuote(paths.stateDir)} --config ${shellQuote(paths.configPath)} ` +
+    `event ingest --provider claude --source hook >/dev/null 2>&1; exit 0 ${HOOK_MARKER}`
   );
 }
 
@@ -44,9 +48,17 @@ export function hooksSettings(paths: Resolved): Json {
 export const workerSettingsPath = (paths: Resolved, workerId: string): string =>
   join(paths.stateDir, "workers", workerId, "claude-settings.json");
 
-/** Writes (or rewrites) a worker's private settings file atomically; safe to repeat on keyed retries. */
-export function writeHooksSettings(path: string, paths: Resolved): void {
-  writeFileAtomic(path, `${JSON.stringify(hooksSettings(paths), null, 2)}\n`, 0o600);
+/**
+ * A worker's private settings: the hooks plus a permission rule for exactly this Agentbus CLI, so the
+ * contract's commands never stop on a prompt. Other tools keep the session's permission mode.
+ */
+export function workerSettings(paths: Resolved): Json {
+  return { ...hooksSettings(paths), permissions: { allow: [`Bash(${paths.cliCommand}:*)`] } };
+}
+
+/** Writes (or rewrites) a settings file atomically; safe to repeat on keyed retries. */
+export function writeHooksSettings(path: string, paths: Resolved, settings = workerSettings(paths)): void {
+  writeFileAtomic(path, `${JSON.stringify(settings, null, 2)}\n`, 0o600);
 }
 
 const isOurs = (h: unknown): boolean =>

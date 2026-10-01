@@ -60,6 +60,8 @@ export class Store {
     for (const [k, v] of Object.entries(process.env)) if (v !== undefined && !SCRUB.includes(k)) env[k] = v;
     env.AGENTBUS_STATE_DIR = this.stateDir;
     env.AGENTBUS_CONFIG = this.configPath;
+    // An installed standalone executable must never stand in for the checkout under test.
+    env.XDG_DATA_HOME = join(this.dir, "data");
     env.NO_COLOR = "1";
     for (const [k, v] of Object.entries(extra)) {
       if (v === undefined) delete env[k];

@@ -1,5 +1,4 @@
 import type { Command } from "commander";
-import pc from "picocolors";
 import { workerSettingsPath, writeHooksSettings } from "../../adapters/claude/settings.ts";
 import { AgentbusError, EXIT, usageError } from "../../errors.ts";
 import { CONTRACT_VERSION, renderContract } from "../../protocol/contract.ts";
@@ -14,7 +13,7 @@ import { writeFileAtomic } from "../../util/fsx.ts";
 import { canonicalDir, newId } from "../../util/misc.ts";
 import { action } from "../action.ts";
 import { collect, readBody } from "../context.ts";
-import { delegationsPlain, delegationsTable, delegationView } from "../render.ts";
+import { delegationDetail, delegationsPlain, delegationsTable, delegationView } from "../render.ts";
 import { drainBeforeRead, parseKey, parseSummary } from "./messaging.ts";
 
 export function registerDelegate(program: Command): void {
@@ -171,15 +170,7 @@ export function registerDelegate(program: Command): void {
         const detail = targets.length > 0;
         ctx.emit(
           { delegations: views, ...(spool ? { spool } : {}) },
-          () =>
-            detail
-              ? views
-                  .map(
-                    (v) =>
-                      `${pc.bold(v.name)} ${v.requestId}\nphase     ${v.phase}${v.outcome ? `/${v.outcome}` : ""} — ${v.phaseReason} (${v.evidenceAge} ago)\nprovider  ${v.provider}  worker ${v.workerId}\nreturn    ${v.returnPath} — ${v.returnPathStatus}${v.pendingQuestion ? `\nquestion  ${v.pendingQuestion.id} ${v.pendingQuestion.summary ?? ""}` : ""}${v.latestSummary ? `\nsummary   ${v.latestSummary}` : ""}${v.probe ? `\nprobe     ${JSON.stringify(v.probe)}` : ""}`,
-                  )
-                  .join("\n\n")
-              : delegationsTable(views),
+          () => (detail ? views.map(delegationDetail).join("\n\n") : delegationsTable(views)),
           () => delegationsPlain(views),
         );
       }),

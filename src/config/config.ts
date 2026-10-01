@@ -41,7 +41,8 @@ export interface Resolved {
   claudeJobsDir: string;
   /** Shell-ready command that runs this CLI; used in worker contracts and hook entries. */
   cliCommand: string;
-  binPath: string;
+  /** The same command as an argument vector, or null when `cliCommand` comes from config verbatim. */
+  cliArgv: string[] | null;
 }
 
 const expandHome = (p: string): string => (p === "~" || p.startsWith("~/") ? join(homedir(), p.slice(2)) : p);
@@ -101,7 +102,30 @@ export function writeConfigFile(path: string, config: Config): void {
 export const shellQuote = (s: string): string =>
   /^[A-Za-z0-9_./:@%+=-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`;
 
-export const BIN_PATH = resolve(import.meta.dir, "../../bin/agentbus");
+/** Running as the standalone executable built by `bun run install:bin`. */
+const COMPILED = import.meta.dir.startsWith("/$bunfs") || import.meta.dir.includes("~BUN");
+
+/** `.ts` source entry: if a worker cannot read the checkout, Bun fails instead of re-running a shebang. */
+export const SOURCE_ENTRY = resolve(import.meta.dir, "../main.ts");
+
+export function installedBinPath(): string {
+  const base = process.env.XDG_DATA_HOME
+    ? absolute(process.env.XDG_DATA_HOME)
+    : join(homedir(), ".local", "share");
+  return join(base, "agentbus", "bin", "agentbus");
+}
+
+/**
+ * What workers and hooks execute: this standalone executable, the installed one on the internal disk,
+ * or Bun plus the source entry. Background Claude sessions may be denied reads on external volumes,
+ * so the installed executable is preferred whenever it exists.
+ */
+function defaultCliArgv(): string[] {
+  if (COMPILED) return [process.execPath];
+  const installed = installedBinPath();
+  if (fileExists(installed)) return [installed];
+  return [process.execPath, SOURCE_ENTRY];
+}
 
 /** Precedence: explicit flags, AGENTBUS_* environment, user config, defaults. */
 export function resolvePaths(overrides: PathOverrides): Resolved {
@@ -150,9 +174,14 @@ export function resolvePaths(overrides: PathOverrides): Resolved {
       ? absolute(config.claudeSettingsPath)
       : join(homedir(), ".claude", "settings.json"),
     claudeJobsDir: config.claudeJobsDir ? absolute(config.claudeJobsDir) : join(homedir(), ".claude", "jobs"),
-    cliCommand: config.cliCommand ?? `${shellQuote(process.execPath)} ${shellQuote(BIN_PATH)}`,
-    binPath: BIN_PATH,
+    ...cliOf(config),
   };
+}
+
+function cliOf(config: Config): { cliCommand: string; cliArgv: string[] | null } {
+  if (config.cliCommand) return { cliCommand: config.cliCommand, cliArgv: null };
+  const argv = defaultCliArgv();
+  return { cliCommand: argv.map(shellQuote).join(" "), cliArgv: argv };
 }
 
 /** Parses `key=value` or validates a bare key against the schema. */

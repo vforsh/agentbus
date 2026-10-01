@@ -255,6 +255,7 @@ function ingestInTx(db: Db, ev: CapturedClaudeEvent): IngestResult {
         ended_at: ev.capturedAt,
         bg_running: running ? running.length : null,
         bg_task_ids: running ? JSON.stringify(running) : null,
+        crons: typeof p.session_crons_count === "number" ? p.session_crons_count : null,
         evidence_at: ev.capturedAt,
         tracking: "ok",
         tracking_reason: null,

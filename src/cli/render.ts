@@ -2,6 +2,7 @@
 
 import pc from "picocolors";
 import type { Envelope } from "../protocol/types.ts";
+import { type Handoff, handoffReadiness } from "../services/handoff.ts";
 import type { PhaseInfo } from "../services/phase.ts";
 import type { Db } from "../store/db.ts";
 import type { DelegationRow } from "../store/delegations.ts";
@@ -92,6 +93,7 @@ export interface DelegationView {
   closedAt: string | null;
   returnPath: string;
   returnPathStatus: string;
+  handoff: Handoff;
   probe?: unknown;
 }
 
@@ -117,6 +119,7 @@ export function delegationView(db: Db, d: DelegationRow, p: PhaseInfo): Delegati
     closedAt: d.closed_at,
     returnPath: d.return_path,
     returnPathStatus: d.return_path_status,
+    handoff: handoffReadiness(db, d),
   };
 }
 
@@ -160,6 +163,20 @@ export function delegationsTable(views: DelegationView[]): string {
       })
       .join("  ");
   return [pc.bold(fmt(header)), ...rows.map((r) => fmt(r, true))].join("\n");
+}
+
+export function delegationDetail(v: DelegationView): string {
+  const lines = [
+    `${pc.bold(v.name)} ${v.requestId}`,
+    `phase     ${v.phase}${v.outcome ? `/${v.outcome}` : ""} — ${v.phaseReason} (${v.evidenceAge} ago)`,
+    `provider  ${v.provider}  worker ${v.workerId}`,
+    `return    ${v.returnPath} — ${v.returnPathStatus}`,
+    `handoff   ${v.handoff.ready ? "ready" : "not ready"} — ${v.handoff.reason}`,
+  ];
+  if (v.pendingQuestion) lines.push(`question  ${v.pendingQuestion.id} ${v.pendingQuestion.summary ?? ""}`);
+  if (v.latestSummary) lines.push(`summary   ${v.latestSummary}`);
+  if (v.probe) lines.push(`probe     ${JSON.stringify(v.probe)}`);
+  return lines.join("\n");
 }
 
 export function delegationsPlain(views: DelegationView[]): string[] {

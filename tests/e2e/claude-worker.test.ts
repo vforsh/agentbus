@@ -323,6 +323,31 @@ describe("delegated turn capture", () => {
   });
 });
 
+describe("handoff readiness", () => {
+  test("requires a Stop of the current binding with known, empty task and wakeup lists", () => {
+    const w = delegateClaude("handoff");
+    const handoff = () => phase(w).handoff;
+    expect(handoff()).toMatchObject({ ready: false, reason: "worker not bound yet" });
+    const p1 = claim(w);
+    expect(handoff()).toMatchObject({ ready: false, reason: "bound turn still active" });
+    s.hook({ ...stop(w, p1, "with a cron"), session_crons: [{ id: "c1" }] });
+    expect(handoff()).toMatchObject({ ready: false, reason: "1 scheduled wakeup(s) pending" });
+    s.hook({
+      ...stop(w, p1, "with a background task", [{ id: "bg", status: "running" }]),
+      session_crons: [],
+    });
+    expect(handoff().ready).toBe(false);
+    s.hook({ ...stop(w, p1, "quiet"), session_crons: [] });
+    expect(handoff()).toMatchObject({ ready: true });
+    // Recorded fixtures carry `session_crons`; a Stop without it leaves wakeups unknown.
+    const { session_crons: _omit, ...noCrons } = stop(w, p1, "no cron list");
+    s.hook(noCrons);
+    expect(handoff()).toMatchObject({ ready: false, reason: "scheduled wakeups unknown" });
+    s.hook(ups(w, uuid(), "manual follow-up"));
+    expect(handoff()).toMatchObject({ ready: false, reason: "binding superseded by unrelated input" });
+  });
+});
+
 describe("spool", () => {
   test("a spooled event survives, drains once, and malformed files do not block valid ones", () => {
     const w = delegateClaude("spooled");

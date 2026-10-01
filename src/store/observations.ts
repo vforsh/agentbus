@@ -20,6 +20,7 @@ export interface TurnRow {
   bg_running: number | null;
   bg_task_ids: string | null;
   bg_baseline: string | null;
+  crons: number | null;
   permission_at: string | null;
   started_at: string | null;
   ended_at: string | null;
