@@ -181,7 +181,13 @@ export function delegationDetail(v: DelegationView): string {
   const lines = [
     `${pc.bold(v.name)} ${v.requestId}`,
     `phase     ${v.phase}${v.outcome ? `/${v.outcome}` : ""} — ${v.phaseReason} (${v.evidenceAge} ago)`,
-    `provider  ${v.provider}  worker ${v.workerId}${v.worker.shortId ? `  short ${v.worker.shortId}` : ""}${v.worker.externalId ? `  native ${v.worker.externalId}` : ""}`,
+    [
+      `provider  ${v.provider}  worker ${v.workerId}`,
+      v.worker.shortId && `short ${v.worker.shortId}`,
+      v.worker.externalId && `native ${v.worker.externalId}`,
+    ]
+      .filter(Boolean)
+      .join("  "),
     ...(v.worker.cwd ? [`cwd       ${v.worker.cwd}`] : []),
     `return    ${v.returnPath} — ${v.returnPathStatus}`,
     `handoff   ${v.handoff.ready ? "ready" : "not ready"} — ${v.handoff.reason}`,

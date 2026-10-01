@@ -233,49 +233,7 @@ function ingestInTx(db: Db, ev: CapturedClaudeEvent): IngestResult {
       ).run(source === "startup" ? "[]" : null, nowIso(), session.id);
       patchAdapterBinding(db, session.id, { process: null, processOwnerGeneration: null });
       track(record(db, baseObs(session, null, null, "owner_started", { source }), null, null));
-      if (source === "resume") {
-        // A resumed owner does not adopt the previous owner's background tasks (observed with Claude Code
-        // 2.1.284 after the daemon respawned a killed owner): a wait armed by the bound turn can no longer
-        // re-invoke the session, so a continuation it promised will not happen.
-        const delegation = openDelegationForWorker(db, session.id);
-        const turn = delegation ? latestTurn(db, delegation.request_id, session.generation) : null;
-        if (delegation && turn?.state === "finished" && (turn.bg_running ?? 0) > 0) {
-          if (turn.tracking === "lost") {
-            // Already reported (for example by a probe during the respawn window); keep the loss permanent.
-            if (turn.tracking_reason !== ORPHANED_BACKGROUND_REASON)
-              updateTurn(db, turn.id, {
-                tracking_reason: ORPHANED_BACKGROUND_REASON,
-                evidence_at: ev.capturedAt,
-              });
-          } else {
-            updateTurn(db, turn.id, {
-              tracking: "lost",
-              tracking_reason: ORPHANED_BACKGROUND_REASON,
-              evidence_at: ev.capturedAt,
-            });
-            track(
-              record(
-                db,
-                {
-                  ...baseObs(session, delegation, turn, "tracking_lost", {
-                    reason: ORPHANED_BACKGROUND_REASON,
-                  }),
-                  id: newId(),
-                  occurrenceKey: `${occ}:orphaned_background`,
-                },
-                delegation,
-                {
-                  kind: "tracking_lost",
-                  provider: "claude",
-                  excerpt: ORPHANED_BACKGROUND_REASON,
-                  label: "tracking lost",
-                },
-                noticeBlocker(db, delegation, turn, session),
-              ),
-            );
-          }
-        }
-      }
+      if (source === "resume") onOwnerResumed(db, ev, session, occ, baseObs, track);
       return out;
     }
     case "UserPromptSubmit":
@@ -533,19 +491,63 @@ function claimWithContract(
   return { ok: true, session, delegation, turn: getTurn(db, turn.id)! };
 }
 
+type BaseObs = (
+  s: SessionRow,
+  d: DelegationRow | null,
+  t: TurnRow | null,
+  kind: string,
+  detail?: Record<string, unknown>,
+) => Parameters<typeof record>[1];
+type Track = (r: { observationId: string; noticeId: string | null }) => void;
+
+/**
+ * A resumed owner does not adopt the previous owner's background tasks (observed with Claude Code 2.1.284
+ * after the daemon respawned a killed owner): a wait armed by the bound turn can no longer re-invoke the
+ * session, so the continuation it promised will not happen. The loss is permanent; a live probe keeps it.
+ */
+function onOwnerResumed(
+  db: Db,
+  ev: CapturedClaudeEvent,
+  session: SessionRow,
+  occ: string | null,
+  baseObs: BaseObs,
+  track: Track,
+): void {
+  const delegation = openDelegationForWorker(db, session.id);
+  const turn = delegation ? latestTurn(db, delegation.request_id, session.generation) : null;
+  if (!delegation || turn?.state !== "finished" || (turn.bg_running ?? 0) === 0) return;
+  const lost = { tracking_reason: ORPHANED_BACKGROUND_REASON, evidence_at: ev.capturedAt };
+  if (turn.tracking === "lost") {
+    // Already reported, for example by a probe during the respawn window: only make it permanent.
+    if (turn.tracking_reason !== ORPHANED_BACKGROUND_REASON) updateTurn(db, turn.id, lost);
+    return;
+  }
+  updateTurn(db, turn.id, { tracking: "lost", ...lost });
+  const obs = baseObs(session, delegation, turn, "tracking_lost", { reason: ORPHANED_BACKGROUND_REASON });
+  const notice = {
+    kind: "tracking_lost",
+    provider: "claude",
+    excerpt: ORPHANED_BACKGROUND_REASON,
+    label: "tracking lost",
+  } as const;
+  track(
+    record(
+      db,
+      { ...obs, id: newId(), occurrenceKey: `${occ ?? ev.sourceEventId}:orphaned_background` },
+      delegation,
+      notice,
+      noticeBlocker(db, delegation, turn, session),
+    ),
+  );
+}
+
 function onPrompt(
   db: Db,
   ev: CapturedClaudeEvent,
   session: SessionRow,
   out: IngestResult,
-  baseObs: (
-    s: SessionRow,
-    d: DelegationRow | null,
-    t: TurnRow | null,
-    kind: string,
-    detail?: Record<string, unknown>,
-  ) => Parameters<typeof record>[1],
-  track: (r: { observationId: string; noticeId: string | null }) => void,
+  baseObs: BaseObs,
+  track: Track,
 ): IngestResult {
   const p = ev.payload;
   const promptId = str(p.prompt_id);
