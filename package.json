@@ -1,0 +1,44 @@
+{
+  "name": "@vforsh/agentbus",
+  "version": "0.1.0",
+  "description": "Durable local mailbox and delegation bus between Codex and Claude Code sessions",
+  "type": "module",
+  "private": true,
+  "license": "UNLICENSED",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/vforsh/agentbus.git"
+  },
+  "bin": {
+    "agentbus": "bin/agentbus"
+  },
+  "files": [
+    "bin",
+    "src",
+    "skill",
+    "README.md"
+  ],
+  "packageManager": "bun@1.4.2",
+  "engines": {
+    "bun": ">=1.4.2"
+  },
+  "scripts": {
+    "agentbus": "bun run bin/agentbus",
+    "lint": "biome check .",
+    "format": "biome check --write .",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test:integration": "bun test --timeout 120000 tests/integration",
+    "test:e2e": "bun test --timeout 120000 tests/e2e",
+    "gate": "bun run lint && bun run typecheck && bun run test:integration && bun run test:e2e"
+  },
+  "dependencies": {
+    "commander": "15.0.0",
+    "picocolors": "1.1.1",
+    "zod": "4.6.5"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.15",
+    "@types/bun": "1.4.2",
+    "typescript": "7.0.2"
+  }
+}

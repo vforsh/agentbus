@@ -1,0 +1,400 @@
+import type { Command } from "commander";
+import pc from "picocolors";
+import { drainSpool, spoolCounts } from "../../adapters/claude/spool.ts";
+import { EXIT, usageError } from "../../errors.ts";
+import {
+  BODY_LIMIT,
+  DEFAULT_LIMIT,
+  MAX_LIMIT,
+  MESSAGE_TYPES,
+  type MessageType,
+  OUTCOMES,
+  type Outcome,
+  SUMMARY_LIMIT,
+} from "../../protocol/types.ts";
+import { requireCaller } from "../../services/caller.ts";
+import { ackMessages, closeByParent, replyMessage, sendMessage } from "../../services/mailbox.ts";
+import { derivePhase } from "../../services/phase.ts";
+import { runWait, type WaitResult } from "../../services/wait.ts";
+import type { Db } from "../../store/db.ts";
+import { getDelegation } from "../../store/delegations.ts";
+import { selectInbox } from "../../store/messages.ts";
+import { endWaitArm } from "../../store/observations.ts";
+import { requireAddress } from "../../store/sessions.ts";
+import { newId, parseDuration } from "../../util/misc.ts";
+import { action } from "../action.ts";
+import { type Ctx, parseLimit, parseSequence, readBody } from "../context.ts";
+import { onInterrupt } from "../interrupt.ts";
+import { envelopes, messagesHuman, messagesPlain } from "../render.ts";
+
+export function parseSummary(summary: string | undefined): string | null {
+  if (summary === undefined) return null;
+  if (/[\r\n]/.test(summary)) throw usageError("--summary must be a single line");
+  if (summary.length > SUMMARY_LIMIT)
+    throw usageError(`--summary must be at most ${SUMMARY_LIMIT} characters`);
+  return summary.trim() || null;
+}
+
+export function parseKey(key: string | undefined): string | null {
+  if (key === undefined) return null;
+  if (!/^[A-Za-z0-9._:@/+-]{1,200}$/.test(key))
+    throw usageError("--key must be 1-200 characters of [A-Za-z0-9._:@/+-]");
+  return key;
+}
+
+function parseType(value: string | undefined): MessageType | null {
+  if (value === undefined) return null;
+  if (!(MESSAGE_TYPES as readonly string[]).includes(value))
+    throw usageError(`--type must be one of ${MESSAGE_TYPES.join(", ")}`);
+  return value as MessageType;
+}
+
+/** read, wait, delegations and status drain the event spool before reading. */
+export function drainBeforeRead(ctx: Ctx, db: Db): { backlog: number; quarantined: number } | null {
+  try {
+    const r = drainSpool(db, ctx.paths);
+    if (r.quarantined > 0) ctx.warn(`${r.quarantined} spooled event(s) quarantined; see agentbus doctor`);
+  } catch (err) {
+    ctx.log(`spool drain skipped: ${(err as Error).message}`);
+  }
+  const counts = spoolCounts(ctx.paths);
+  return counts.backlog > 0 || counts.quarantined > 0 ? counts : null;
+}
+
+const delegationSummary = (db: Db, requestId: string | null) => {
+  if (!requestId) return null;
+  const d = getDelegation(db, requestId);
+  if (!d) return null;
+  const p = derivePhase(db, d);
+  return { requestId: d.request_id, state: d.state, phase: p.phase, outcome: p.outcome };
+};
+
+function waitHuman(db: Db, result: WaitResult): string {
+  const parts: string[] = [];
+  if (result.reason !== "messages") parts.push(pc.bold(result.reason));
+  if (result.batch) {
+    parts.push(
+      result.batch.map((b) => `${b.worker}\t${b.phase}${b.outcome ? `/${b.outcome}` : ""}`).join("\n"),
+      "",
+    );
+  }
+  parts.push(messagesHuman(db, result.rows));
+  return parts.join("\n");
+}
+
+export function registerMessaging(program: Command): void {
+  program
+    .command("send <recipient>")
+    .description("Send a message or a new root request (a request opens a delegation)")
+    .option("--file <path|->", "body file, or - for stdin")
+    .option("--type <type>", "message or request", "message")
+    .option("--key <key>", "idempotency key, unique per sender")
+    .option("--summary <text>", "one-line summary (at most 200 characters)")
+    .option("--dry-run", "validate and describe without writing")
+    .action(
+      action(
+        async (
+          ctx,
+          recipientArg: string,
+          opts: { file?: string; type: string; key?: string; summary?: string; dryRun?: boolean },
+        ) => {
+          if (opts.type !== "message" && opts.type !== "request") {
+            throw usageError(
+              "send accepts only --type message or --type request; task replies use `agentbus reply`",
+            );
+          }
+          const body = await readBody(opts.file, BODY_LIMIT);
+          const summary = parseSummary(opts.summary);
+          const key = parseKey(opts.key);
+          const db = ctx.db();
+          const caller = requireCaller(db, ctx.opts.as);
+          const recipient = requireAddress(db, recipientArg);
+          if (opts.dryRun) {
+            const preview = {
+              dryRun: true,
+              messageId: `preview-${newId()}`,
+              from: caller.session.id,
+              to: recipient.id,
+              type: opts.type,
+              bytes: Buffer.byteLength(body),
+            };
+            ctx.emit(preview, () => `Would send ${opts.type} (${preview.bytes} bytes) to ${recipient.id}`);
+            return;
+          }
+          const r = sendMessage(db, caller.session, { recipient, type: opts.type, body, summary, key });
+          const data = {
+            messageId: r.message.id,
+            sequence: r.message.sequence,
+            duplicate: r.duplicate,
+            correlationId: r.message.correlation_id,
+            delegation: r.delegation
+              ? {
+                  ...delegationSummary(db, r.delegation.request_id),
+                  returnPath: r.delegation.return_path,
+                  returnPathStatus: r.delegation.return_path_status,
+                }
+              : null,
+          };
+          ctx.emit(
+            data,
+            () =>
+              `${r.duplicate ? "Already sent" : "Sent"} ${opts.type} ${r.message.id} (#${r.message.sequence})`,
+            () => [r.message.id, String(r.message.sequence), String(r.duplicate)].join("\t"),
+          );
+        },
+      ),
+    );
+
+  program
+    .command("reply <message-id>")
+    .description("Reply to a message; recipient and correlation are derived from it")
+    .option("--file <path|->", "body file, or - for stdin")
+    .option("--type <type>", "message, progress, question or result", "message")
+    .option("--outcome <outcome>", "success, blocked, failed or unknown (results only)")
+    .option("--key <key>", "idempotency key, unique per sender")
+    .option("--summary <text>", "one-line summary (at most 200 characters)")
+    .option("--dry-run", "validate and describe without writing")
+    .action(
+      action(
+        async (
+          ctx,
+          messageId: string,
+          opts: {
+            file?: string;
+            type: string;
+            outcome?: string;
+            key?: string;
+            summary?: string;
+            dryRun?: boolean;
+          },
+        ) => {
+          if (opts.type === "request")
+            throw usageError(
+              "reply --type request is not allowed; delegate nested work with a new `delegate` or `send --type request`",
+            );
+          if (!["message", "progress", "question", "result"].includes(opts.type)) {
+            throw usageError("--type must be message, progress, question or result");
+          }
+          if (opts.outcome !== undefined && !(OUTCOMES as readonly string[]).includes(opts.outcome)) {
+            throw usageError(`--outcome must be one of ${OUTCOMES.join(", ")}`);
+          }
+          const body = await readBody(opts.file, BODY_LIMIT);
+          const summary = parseSummary(opts.summary);
+          const key = parseKey(opts.key);
+          const db = ctx.db();
+          const caller = requireCaller(db, ctx.opts.as);
+          if (opts.dryRun) {
+            ctx.emit(
+              { dryRun: true, messageId: `preview-${newId()}`, inReplyTo: messageId, type: opts.type },
+              () => `Would reply ${opts.type} to ${messageId}`,
+            );
+            return;
+          }
+          // Drain first so a just-captured prompt binding is visible for turn attribution.
+          drainBeforeRead(ctx, db);
+          const r = replyMessage(db, caller.session, {
+            messageId,
+            type: opts.type as "message" | "progress" | "question" | "result",
+            outcome: (opts.outcome as Outcome | undefined) ?? null,
+            body,
+            summary,
+            key,
+          });
+          const data = {
+            messageId: r.message.id,
+            sequence: r.message.sequence,
+            duplicate: r.duplicate,
+            to: r.message.to_id,
+            correlationId: r.message.correlation_id,
+            inReplyTo: r.message.in_reply_to,
+            turnRef: r.message.turn_ref,
+            attribution: r.attribution,
+            delegation: delegationSummary(db, r.delegation?.request_id ?? null),
+          };
+          if (r.attribution === "unavailable")
+            ctx.warn("no bound turn found for this reply; finish notices for the turn are not suppressed");
+          ctx.emit(
+            data,
+            () =>
+              `${r.duplicate ? "Already replied" : "Replied"} ${opts.type} ${r.message.id} (#${r.message.sequence})${r.closedDelegation ? " — delegation closed" : ""}`,
+            () => [r.message.id, String(r.message.sequence), String(r.duplicate)].join("\t"),
+          );
+        },
+      ),
+    );
+
+  program
+    .command("read")
+    .description("Read the caller's unacknowledged inbox; never changes receipts")
+    .option("--all", "history mode: include acknowledged messages")
+    .option("--unseen", "only unseen messages")
+    .option("--after <seq>", "only messages after this sequence")
+    .option("--from <address>", "only messages from this sender")
+    .option("--type <type>", "only this message type")
+    .option("--correlation <id>", "only this correlation (request ID)")
+    .option("--limit <n>", `maximum records (default ${DEFAULT_LIMIT}, at most ${MAX_LIMIT})`)
+    .action(
+      action(
+        (
+          ctx,
+          opts: {
+            all?: boolean;
+            unseen?: boolean;
+            after?: string;
+            from?: string;
+            type?: string;
+            correlation?: string;
+            limit?: string;
+          },
+        ) => {
+          if (opts.all && opts.unseen) throw usageError("--all and --unseen are incompatible");
+          const db = ctx.db();
+          const caller = requireCaller(db, ctx.opts.as);
+          const spool = drainBeforeRead(ctx, db);
+          const after = parseSequence(opts.after, "--after");
+          const batch = selectInbox(db, {
+            recipientId: caller.session.id,
+            includeAcknowledged: !!opts.all,
+            unseenOnly: !!opts.unseen,
+            after,
+            fromId: opts.from ? requireAddress(db, opts.from, "sender").id : null,
+            type: parseType(opts.type),
+            correlationIds: opts.correlation ? [opts.correlation] : null,
+            limit: parseLimit(opts.limit, DEFAULT_LIMIT, MAX_LIMIT),
+          });
+          const cursor = batch.rows.length > 0 ? batch.rows[batch.rows.length - 1]!.sequence : after;
+          ctx.emit(
+            { messages: envelopes(batch.rows), cursor, hasMore: batch.hasMore, ...(spool ? { spool } : {}) },
+            () =>
+              messagesHuman(db, batch.rows) +
+              (batch.hasMore ? `\n\n${pc.yellow(`More messages available: --after ${cursor}`)}` : ""),
+            () => messagesPlain(batch.rows),
+          );
+        },
+      ),
+    );
+
+  program
+    .command("wait")
+    .description("Wait for unseen messages and atomically mark the returned batch seen (never acknowledges)")
+    .option("--timeout <duration>", "maximum wait (default 60s, at most 24h)", "60s")
+    .option("--settled", "batch mode: return on attention events or when every captured delegation settles")
+    .option("--probe <interval>", "probe open delegations' liveness at this interval (at least 10s)")
+    .option("--after <seq>", "only messages after this sequence")
+    .option("--from <address>", "only messages from this sender")
+    .option("--type <type>", "only this message type")
+    .option("--correlation <id>", "only this correlation (request ID)")
+    .option("--limit <n>", `maximum records (default ${DEFAULT_LIMIT}, at most ${MAX_LIMIT})`)
+    .action(
+      action(
+        async (
+          ctx,
+          opts: {
+            timeout: string;
+            settled?: boolean;
+            probe?: string;
+            after?: string;
+            from?: string;
+            type?: string;
+            correlation?: string;
+            limit?: string;
+          },
+        ) => {
+          const timeoutMs = parseDuration(opts.timeout, "--timeout");
+          if (timeoutMs > 24 * 3_600_000) throw usageError("--timeout must be at most 24h");
+          const probeMs = opts.probe ? parseDuration(opts.probe, "--probe") : null;
+          if (probeMs !== null && probeMs < 10_000) throw usageError("--probe must be at least 10s");
+          if (opts.settled && (opts.after || opts.from || opts.type)) {
+            throw usageError("--settled cannot be combined with --after, --from or --type");
+          }
+          const db = ctx.db();
+          const caller = requireCaller(db, ctx.opts.as);
+          const fault = process.env.AGENTBUS_FAULT_INJECT === "wait-after-seen-commit";
+          let armId: string | null = null;
+          const release = onInterrupt(() => {
+            if (armId) endWaitArm(db, armId, "interrupted");
+          });
+          const after = parseSequence(opts.after, "--after");
+          const result = await runWait(
+            db,
+            ctx.paths,
+            caller.session,
+            {
+              timeoutMs,
+              probeMs,
+              after,
+              fromId: opts.from ? requireAddress(db, opts.from, "sender").id : null,
+              type: parseType(opts.type),
+              correlation: opts.correlation ?? null,
+              limit: parseLimit(opts.limit, DEFAULT_LIMIT, MAX_LIMIT),
+              settled: !!opts.settled,
+            },
+            {
+              setArm: (id) => {
+                armId = id;
+              },
+              afterSeenCommit: fault ? () => process.exit(137) : undefined,
+            },
+          );
+          release();
+          const cursor = result.rows.length > 0 ? result.rows[result.rows.length - 1]!.sequence : after;
+          if (result.timedOut) ctx.exitCode = EXIT.timeout;
+          ctx.emit(
+            {
+              // Origin first: hooks find it at the head of large receipts without parsing message bodies.
+              origin: result.origin,
+              messages: envelopes(result.rows),
+              cursor,
+              hasMore: result.hasMore,
+              timedOut: result.timedOut,
+              reason: result.reason,
+              batch: result.batch,
+              recovery: "run a paginated `agentbus read` sweep before re-arming",
+            },
+            () =>
+              result.timedOut
+                ? pc.dim(
+                    "Timed out with no new messages; run `agentbus read` to recover pending mail before re-arming.",
+                  )
+                : waitHuman(db, result),
+            () => messagesPlain(result.rows),
+          );
+        },
+      ),
+    );
+
+  program
+    .command("ack <message-id...>")
+    .description("Acknowledge messages addressed to the caller (atomic and idempotent)")
+    .action(
+      action((ctx, ids: string[]) => {
+        const db = ctx.db();
+        const caller = requireCaller(db, ctx.opts.as);
+        const r = ackMessages(db, caller.session, ids);
+        ctx.emit(
+          r,
+          () => `Acknowledged ${ids.length} message(s)`,
+          () => ids,
+        );
+      }),
+    );
+
+  program
+    .command("close <request>")
+    .description("Parent closes an open delegation without a result (never stops a process)")
+    .action(
+      action((ctx, target: string) => {
+        const db = ctx.db();
+        const caller = requireCaller(db, ctx.opts.as);
+        const r = closeByParent(db, caller.session, target);
+        ctx.emit(
+          { requestId: r.delegation.request_id, state: r.delegation.state, changed: r.changed },
+          () =>
+            r.changed
+              ? `Closed delegation ${r.delegation.request_id}`
+              : `Delegation ${r.delegation.request_id} is already ${r.delegation.state}`,
+          () => [r.delegation.request_id, r.delegation.state, String(r.changed)].join("\t"),
+        );
+      }),
+    );
+}
