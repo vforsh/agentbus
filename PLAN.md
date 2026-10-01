@@ -1,6 +1,6 @@
 # Agentbus implementation plan
 
-Status: proposed design, reviewed on 2026-10-01 for delivery recovery, lifecycle correctness and launcher ownership; implementation has not started. Provider experiments below are evidence for individual primitives, not completed end-to-end acceptance.
+Status: milestones 1–3 implemented on 2026-10-01 (see README for the gate and open live checks); milestone 4 has its consumer skill and README but no launcher integration or live provider gates yet. Provider experiments below are evidence for individual primitives, not completed end-to-end acceptance.
 
 Agentbus is a local CLI for communication between agent sessions. It supports delegation in every direction between Codex and Claude Code:
 
