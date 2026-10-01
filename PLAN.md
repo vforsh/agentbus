@@ -1,6 +1,6 @@
 # Agentbus implementation plan
 
-Status: milestones 1–3 implemented on 2026-10-01 (see README for the gate and open live checks); milestone 4 has its consumer skill and README but no launcher integration or live provider gates yet. Provider experiments below are evidence for individual primitives, not completed end-to-end acceptance.
+Status: milestones 1–3 implemented on 2026-10-01; milestone 4 launchers integrated, Claude→Codex live gate passed; the Codex→Claude heartbeat gate (needs the Codex app) and the Claude Desktop resume checks remain open (see README). Provider experiments below are evidence for individual primitives, not completed end-to-end acceptance.
 
 Agentbus is a local CLI for communication between agent sessions. It supports delegation in every direction between Codex and Claude Code:
 
@@ -844,11 +844,20 @@ The following experiments were recorded by the earlier plan on 2026-09-30 with C
 | Cited links | All return HTTP 200 | No changes |
 | Live check 2026-10-01, five Haiku `--bg` workers with per-worker `--settings` hooks (Claude Code 2.1.284) | Contract `UserPromptSubmit` claimed each pending worker; a result was attributed to its bound turn and its later Stop posted nothing; a worker without a result produced a `turn_finished` notice with its final text; a question suppressed the Stop notice, the worker's own background `agentbus wait` woke it after the parent answered and the task notification was proven a continuation through the wait receipt | Per-worker hooks, claim, notice suppression and background-wait follow-ups confirmed live |
 | Same run: permission and stop | `PermissionRequest` carried `prompt_id`; the inventory row showed `status: waiting`, `waitingFor: "permission prompt"`, `state: blocked`; `claude stop` during the prompt fired `SessionEnd` (`reason: other`) → `turn_interrupted` | Exact permission attribution works; mid-turn stop interrupts |
+| Launcher check 2026-10-01: background worker reading the external volume | Inside a later `claude --bg` worker, hooks and Bash could `stat` files under `/Volumes/Example` but `read` failed with `Operation not permitted` (macOS privacy control); the home directory stayed readable. Bun then executed the unreadable extensionless `bin/agentbus` through its shebang, which re-ran the same failing Bun: an unbounded process chain | Workers and hooks run a compiled executable on the internal disk (`bun run install:bin`); the source fallback uses `src/main.ts`, which fails instead of looping |
+| Same check: `--mode manual` worker with the per-worker `permissions.allow` rule for the Agentbus CLI | Contract commands ran without prompts; the worker's later `Write` raised `PermissionRequest` → `permission_request` notice, phase `permission`, handoff not ready; `claude stop` → `turn_interrupted` | Pre-allowing only the CLI keeps the session's permission mode for everything else |
+| Live gate 2026-10-01, Claude→Codex (Codex CLI 0.157.1, `gpt-6-luna`/low) through tracked `claude-to-codex` | The Codex worker asked a question and ended its run; this Claude parent's background `agentbus wait` re-invoked it; the answer was delivered with `spawn.sh --resume`, which kept the thread ID; a second wake-up delivered `result/success`; all launcher locks were released | Acceptance criterion 10 met for Claude→Codex |
+| Fake-codex runner checks | Retry of the same task recovered the launch instead of starting another run; a concurrent resume was refused by the thread lock; a resume after `desktopOpenRequested` was refused; runner `kill -9` with a live child → `tracking_lost`, then both dead → `turn_interrupted` | Launch, resume and Desktop ownership guards behave as specified |
 | Same run: `kill -9` of the owner (`claude bg-spare`) | No hook fired; the `claude agents` row stayed `state: working` with no `pid` or `status`; the probe's recorded PID+start identity confirmed death → `turn_interrupted` | Provider state goes stale after a crash; identity-based probes are required |
 
 `claude-threads` documents further facts verified with Claude desktop 2.16120: model-classified `done`/`blocked`/`working` states, `notify_when_idle` arriving late, and edit refusals in shared checkouts. They informed the phase model and the decision to keep the isolation rule in the skill.
 
 ## Revision log
+
+2026-10-01, milestone 4 launchers:
+
+- `codex-to-claude` and `claude-to-codex` are tracked by default (`--no-track` keeps the plain path): keyed `delegate`, launch manifests, request/thread ownership locks, contract appended to the prompt, `session bind`, runner events with durable run IDs and a sanitized worker environment, persisted Desktop-open marker, and the Desktop handoff guard based on `delegations` handoff readiness (latest Stop listed no background tasks or scheduled wakeups; migration 003 records the latter) plus a fresh idle probe.
+- Worker settings pre-allow the Agentbus CLI. Workers and hooks run a standalone executable on the internal disk because background sessions can lose read access to external volumes.
 
 2026-10-01, per-worker Claude hooks:
 

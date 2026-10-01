@@ -11,7 +11,7 @@ Design and rationale: [PLAN.md](PLAN.md). Agent-facing usage: [skill/agentbus/SK
 | 1. Scaffold, contracts, config, diagnostics | Implemented |
 | 2. Durable mailbox (sessions, messages, receipts, delegations, waits) | Implemented; acceptance 1–4 covered by process-level checks |
 | 3. Worker result capture (Claude hooks + spool, Codex runner events, probes, phases) | Implemented at the adapter level with recorded fixtures; live Claude checks below still open |
-| 4. Launcher integration and live Codex↔Claude workflows | Not started: consumer skill and README done; `codex-to-claude` / `claude-to-codex` changes and live gates pending |
+| 4. Launcher integration and live Codex↔Claude workflows | Launchers tracked by default; Claude→Codex live gate passed; Codex→Claude heartbeat gate open (needs the Codex app) |
 | 5. `claude-threads` on Agentbus | Not started |
 | 6. Codex wake adapter | Not started (conditional on a spike) |
 
@@ -26,12 +26,18 @@ cd ~/dev/agentbus && bun install && bun link
 ```
 
 ```bash
+bun run install:bin
+```
+
+```bash
 agentbus init
 ```
 
 ```bash
 agentbus doctor
 ```
+
+`install:bin` compiles a standalone executable to `${XDG_DATA_HOME:-~/.local/share}/agentbus/bin/agentbus` (~60 MB, includes the Bun runtime). Worker contracts and hooks run that copy whenever it exists. Background Claude sessions can be denied reads on external volumes by macOS privacy controls (observed: `stat` succeeds, `read` fails with `Operation not permitted`), so the CLI that workers execute must live on the internal disk. Rebuild after changing the checkout; `agentbus doctor` warns when the installed copy is stale or when workers would run from an external volume.
 
 State lives in `${XDG_STATE_HOME:-~/.local/state}/agentbus/` (internal disk, `0700`/`0600`); config in `${XDG_CONFIG_HOME:-~/.config}/agentbus/config.json`. Override with `--state-dir`/`--config` or `AGENTBUS_STATE_DIR`/`AGENTBUS_CONFIG`.
 
@@ -43,7 +49,7 @@ Hooks run only in Agentbus's own Claude workers; `~/.claude/settings.json` is no
 claude --bg --settings "$claudeSettings" ...
 ```
 
-The file subscribes `SessionStart`, `UserPromptSubmit`, `PermissionRequest`, `Stop`, `StopFailure` and `SessionEnd`. Each entry pins the absolute Bun runtime, CLI path, store and config, guarded so an unmounted checkout volume is a silent no-op. Hooks print nothing and always exit 0. `agentbus hooks claude print [--settings-file <path>]` shows or writes the same settings.
+The file subscribes `SessionStart`, `UserPromptSubmit`, `PermissionRequest`, `Stop`, `StopFailure` and `SessionEnd`, and pre-allows exactly the Agentbus CLI command (`permissions.allow`), so contract commands never stop on a permission prompt while other tools keep the session's permission mode. Each entry pins the absolute Bun runtime, CLI path, store and config, guarded so an unmounted checkout volume is a silent no-op. Hooks print nothing and always exit 0. `agentbus hooks claude print [--settings-file <path>]` shows or writes the same settings.
 
 Observation scope is the background owner, as with the Codex runner: after a Desktop handoff the resumed session does not carry `--settings`, so lifecycle notices stop and the worker's explicit `question`/`result` replies plus `--probe` remain. An optional user-level install (`agentbus hooks claude install|uninstall|status [--dry-run]`) extends capture across the handoff at the cost of running the hook, one ~31 ms read-only lookup, in every Claude session; it preserves unrelated entries and writes a private backup.
 
@@ -55,7 +61,7 @@ Observation scope is the background owner, as with the Codex runner: after a Des
 | `claudeBin` / `codexBin` | `claude` / `codex` on PATH | Provider executables used by probes |
 | `claudeSettingsPath` | `~/.claude/settings.json` | Target of `hooks claude` |
 | `claudeJobsDir` | `~/.claude/jobs` | Optional job diagnostics for `--probe` |
-| `cliCommand` | `<bun> <checkout>/bin/agentbus` | Command rendered into worker contracts |
+| `cliCommand` | installed executable, else `<bun> <checkout>/src/main.ts` | Command rendered into worker contracts and hooks |
 
 ```bash
 agentbus config set codexBin=/opt/homebrew/bin/codex
@@ -169,7 +175,11 @@ Recorded evidence lives in `tests/fixtures/` (Claude Code 2.1.284, Codex CLI 0.1
 
 Verified on 2026-10-01 with five disposable Haiku `--bg` workers using per-worker `--settings` hooks (see PLAN "Pre-implementation evidence"): contract claim, result attribution and Stop suppression, fallback `turn_finished`, question → background-wait wake-up → result, `PermissionRequest` with `prompt_id`, `claude stop` mid-turn → `turn_interrupted`, and `kill -9` → stale `claude agents` row but probe-confirmed `turn_interrupted`.
 
+Claude→Codex live gate (2026-10-01): a real `codex exec` worker asked a question, the Claude parent's background `agentbus wait` re-invoked it, the answer went through `spawn.sh --resume` on the same thread ID, and the result arrived through a second wake-up.
+
 Still open:
+
+- Codex→Claude: the result returns to the original Codex chat through a heartbeat (requires the Codex app's automation tool).
 
 - Claude: session UUID and `prompt_id` across Desktop resume, and whether per-worker `--settings` hooks stop there; background wait re-invocation in a Desktop-owned session.
 - Codex: `codex exec resume` keeps the thread ID; `CODEX_THREAD_ID` in Desktop tool shells; heartbeat create/run/cleanup.

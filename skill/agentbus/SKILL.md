@@ -72,6 +72,7 @@ Your prompt carries an `<agentbus-contract version="1">` block. Follow it exactl
 
 ## Setup and diagnostics
 
+- Install the worker-facing executable on the internal disk once per change of the checkout: `bun run install:bin` in the agentbus checkout (background Claude sessions may be unable to read external volumes).
 - `agentbus doctor` — read-only readiness (store schema, spool backlog, hook installation and pinned store, provider CLIs, caller).
 - Claude workers are observed through per-worker hooks: start them with `claude --bg --settings <claudeSettings>` from the `delegate` receipt. After a Desktop handoff only explicit replies and `--probe` remain. `agentbus hooks claude install|uninstall|status|print [--dry-run]` manages an optional user-level install that also covers handed-off sessions but runs in every Claude session.
 - `agentbus config set codexBin=/path claudeBin=/path`, `config get|unset|import|export|path|ls`.
