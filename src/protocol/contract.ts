@@ -27,10 +27,11 @@ export function renderContract(c: ContractInput): string {
     c.provider === "claude"
       ? [
           `   Then arm ONE background wait and end your turn (run it with run_in_background; never poll in the foreground):`,
-          `     ${ab} wait --correlation ${c.requestId} --timeout 30m --json`,
+          `     ${ab} wait --replace --correlation ${c.requestId} --timeout 30m --json`,
           `   When it re-invokes you (answer, timeout exit 3, or any other exit): run the read command from step 1,`,
           `   handle and ack the answer, and re-arm the wait only if you are still waiting.`,
-          `   If you also lead your own Agentbus children, use your single unfiltered wait for both roles instead.`,
+          `   --replace retires any earlier wait of yours. If you also lead your own Agentbus children, use your`,
+          `   single unfiltered wait (also with --replace) for both roles instead.`,
         ]
       : [
           `   Then either wait in-turn with bounded calls (repeat while still waiting; exit 3 means timeout):`,

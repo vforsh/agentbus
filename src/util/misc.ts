@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
-import { realpathSync } from "node:fs";
-import { resolve } from "node:path";
+import { existsSync, realpathSync, statSync } from "node:fs";
+import { dirname, join, relative, resolve } from "node:path";
 import { usageError } from "../errors.ts";
 
 export const nowIso = (): string => new Date().toISOString();
@@ -59,15 +59,24 @@ export function formatAge(fromIso: string | null | undefined, now = Date.now()):
 }
 
 /** Display path plus resolved real path; `~/dev` and `/workspace` compare equal. */
-export function canonicalDir(input: string): { display: string; real: string } {
+/**
+ * Absolute and real path of a directory. With `allowMissing`, a directory a launcher creates later
+ * (for example `claude --worktree`) resolves through its nearest existing ancestor.
+ */
+export function canonicalDir(
+  input: string,
+  opts: { allowMissing?: boolean } = {},
+): { display: string; real: string } {
   const display = resolve(input);
-  let real: string;
   try {
-    real = realpathSync(display);
+    return { display, real: realpathSync(display) };
   } catch {
-    throw usageError(`Directory does not exist: ${display}`, { cwd: display });
+    if (!opts.allowMissing) throw usageError(`Directory does not exist: ${display}`, { cwd: display });
   }
-  return { display, real };
+  let ancestor = dirname(display);
+  while (!existsSync(ancestor) && dirname(ancestor) !== ancestor) ancestor = dirname(ancestor);
+  if (!statSync(ancestor).isDirectory()) throw usageError(`Not a directory: ${ancestor}`, { cwd: display });
+  return { display, real: join(realpathSync(ancestor), relative(ancestor, display)) };
 }
 
 export function realOrSelf(path: string): string {

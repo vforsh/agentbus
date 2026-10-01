@@ -78,6 +78,8 @@ export interface DelegationView {
   name: string;
   workerId: string;
   provider: string;
+  /** Native handles for launcher scripts: session UUID, Claude short ID and directory. */
+  worker: { externalId: string | null; shortId: string | null; cwd: string | null };
   labels: Record<string, string>;
   state: DelegationRow["state"];
   phase: PhaseInfo["phase"];
@@ -104,6 +106,11 @@ export function delegationView(db: Db, d: DelegationRow, p: PhaseInfo): Delegati
     name: w ? displayName(w) : d.worker_id.slice(0, 8),
     workerId: d.worker_id,
     provider: w?.provider ?? "unknown",
+    worker: {
+      externalId: w?.external_id ?? null,
+      shortId: w ? shortIdOf(w.adapter_binding) : null,
+      cwd: w?.cwd ?? null,
+    },
     labels: w ? JSON.parse(w.labels) : {},
     state: d.state,
     phase: p.phase,
@@ -121,6 +128,11 @@ export function delegationView(db: Db, d: DelegationRow, p: PhaseInfo): Delegati
     returnPathStatus: d.return_path_status,
     handoff: handoffReadiness(db, d),
   };
+}
+
+function shortIdOf(adapterBinding: string): string | null {
+  const v = (JSON.parse(adapterBinding) as Record<string, unknown>).shortId;
+  return typeof v === "string" ? v : null;
 }
 
 const phaseColor = (phase: string): string => {
@@ -169,7 +181,8 @@ export function delegationDetail(v: DelegationView): string {
   const lines = [
     `${pc.bold(v.name)} ${v.requestId}`,
     `phase     ${v.phase}${v.outcome ? `/${v.outcome}` : ""} — ${v.phaseReason} (${v.evidenceAge} ago)`,
-    `provider  ${v.provider}  worker ${v.workerId}`,
+    `provider  ${v.provider}  worker ${v.workerId}${v.worker.shortId ? `  short ${v.worker.shortId}` : ""}${v.worker.externalId ? `  native ${v.worker.externalId}` : ""}`,
+    ...(v.worker.cwd ? [`cwd       ${v.worker.cwd}`] : []),
     `return    ${v.returnPath} — ${v.returnPathStatus}`,
     `handoff   ${v.handoff.ready ? "ready" : "not ready"} — ${v.handoff.reason}`,
   ];

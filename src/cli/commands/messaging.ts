@@ -70,6 +70,7 @@ const delegationSummary = (db: Db, requestId: string | null) => {
 };
 
 function waitHuman(db: Db, result: WaitResult): string {
+  if (result.reason === "superseded") return pc.dim("Superseded by a newer wait of this session.");
   const parts: string[] = [];
   if (result.reason !== "messages") parts.push(pc.bold(result.reason));
   if (result.batch) {
@@ -280,6 +281,7 @@ export function registerMessaging(program: Command): void {
     .option("--timeout <duration>", "maximum wait (default 60s, at most 24h)", "60s")
     .option("--settled", "batch mode: return on attention events or when every captured delegation settles")
     .option("--probe <interval>", "probe open delegations' liveness at this interval (at least 10s)")
+    .option("--replace", "retire the caller's other running waits, which exit with reason superseded")
     .option("--after <seq>", "only messages after this sequence")
     .option("--from <address>", "only messages from this sender")
     .option("--type <type>", "only this message type")
@@ -293,6 +295,7 @@ export function registerMessaging(program: Command): void {
             timeout: string;
             settled?: boolean;
             probe?: string;
+            replace?: boolean;
             after?: string;
             from?: string;
             type?: string;
@@ -328,6 +331,7 @@ export function registerMessaging(program: Command): void {
               correlation: opts.correlation ?? null,
               limit: parseLimit(opts.limit, DEFAULT_LIMIT, MAX_LIMIT),
               settled: !!opts.settled,
+              replace: !!opts.replace,
             },
             {
               setArm: (id) => {
@@ -349,7 +353,11 @@ export function registerMessaging(program: Command): void {
               timedOut: result.timedOut,
               reason: result.reason,
               batch: result.batch,
-              recovery: "run a paginated `agentbus read` sweep before re-arming",
+              replaced: result.replaced,
+              recovery:
+                result.reason === "superseded"
+                  ? "a newer wait of this session is running; do not re-arm"
+                  : "run a paginated `agentbus read` sweep before re-arming",
             },
             () =>
               result.timedOut

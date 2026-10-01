@@ -15,7 +15,7 @@ import { type DelegationRow, getDelegation } from "../store/delegations.ts";
 import { getTurn, latestTurn, type TurnRow, updateTurn } from "../store/observations.ts";
 import { getSession, patchAdapterBinding, type SessionRow } from "../store/sessions.ts";
 import { newId, nowIso } from "../util/misc.ts";
-import { noticeBlocker, record } from "./observe.ts";
+import { noticeBlocker, ORPHANED_BACKGROUND_REASON, record } from "./observe.ts";
 
 export interface ProbeReport {
   requestId: string;
@@ -304,7 +304,8 @@ function markTrackingLost(
 function restoreTracking(db: Db, worker: SessionRow, turn: TurnRow): void {
   tx(db, () => {
     const t = stillCurrent(db, worker, turn);
-    if (t?.tracking !== "lost") return;
+    // A live owner proves liveness, not that a previous owner's background work can still continue it.
+    if (t?.tracking !== "lost" || t.tracking_reason === ORPHANED_BACKGROUND_REASON) return;
     updateTurn(db, t.id, { tracking: "ok", tracking_reason: null, evidence_at: nowIso() });
     record(db, probeObs(getSession(db, worker.id)!, t, "tracking_restored", {}), null, null);
   });

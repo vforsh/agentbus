@@ -4,7 +4,13 @@ import { closeSync, openSync, readSync, statSync } from "node:fs";
 import { basename } from "node:path";
 import { parseContract } from "../../protocol/contract.ts";
 import { unresolvedQuestion } from "../../services/mailbox.ts";
-import { lastNoticeBody, noticeBlocker, record, turnHasExplicitReport } from "../../services/observe.ts";
+import {
+  lastNoticeBody,
+  noticeBlocker,
+  ORPHANED_BACKGROUND_REASON,
+  record,
+  turnHasExplicitReport,
+} from "../../services/observe.ts";
 import { type Db, tx } from "../../store/db.ts";
 import { type DelegationRow, getDelegation, openDelegationForWorker } from "../../store/delegations.ts";
 import { messagesInCorrelation } from "../../store/messages.ts";
@@ -20,7 +26,7 @@ import {
   updateTurn,
 } from "../../store/observations.ts";
 import { findByExternal, getSession, patchAdapterBinding, type SessionRow } from "../../store/sessions.ts";
-import { nowIso, oneLine, realOrSelf } from "../../util/misc.ts";
+import { newId, nowIso, oneLine, realOrSelf } from "../../util/misc.ts";
 
 export const CLAUDE_SOURCE_SCHEMA = "claude-hook-v1";
 
@@ -227,6 +233,49 @@ function ingestInTx(db: Db, ev: CapturedClaudeEvent): IngestResult {
       ).run(source === "startup" ? "[]" : null, nowIso(), session.id);
       patchAdapterBinding(db, session.id, { process: null, processOwnerGeneration: null });
       track(record(db, baseObs(session, null, null, "owner_started", { source }), null, null));
+      if (source === "resume") {
+        // A resumed owner does not adopt the previous owner's background tasks (observed with Claude Code
+        // 2.1.284 after the daemon respawned a killed owner): a wait armed by the bound turn can no longer
+        // re-invoke the session, so a continuation it promised will not happen.
+        const delegation = openDelegationForWorker(db, session.id);
+        const turn = delegation ? latestTurn(db, delegation.request_id, session.generation) : null;
+        if (delegation && turn?.state === "finished" && (turn.bg_running ?? 0) > 0) {
+          if (turn.tracking === "lost") {
+            // Already reported (for example by a probe during the respawn window); keep the loss permanent.
+            if (turn.tracking_reason !== ORPHANED_BACKGROUND_REASON)
+              updateTurn(db, turn.id, {
+                tracking_reason: ORPHANED_BACKGROUND_REASON,
+                evidence_at: ev.capturedAt,
+              });
+          } else {
+            updateTurn(db, turn.id, {
+              tracking: "lost",
+              tracking_reason: ORPHANED_BACKGROUND_REASON,
+              evidence_at: ev.capturedAt,
+            });
+            track(
+              record(
+                db,
+                {
+                  ...baseObs(session, delegation, turn, "tracking_lost", {
+                    reason: ORPHANED_BACKGROUND_REASON,
+                  }),
+                  id: newId(),
+                  occurrenceKey: `${occ}:orphaned_background`,
+                },
+                delegation,
+                {
+                  kind: "tracking_lost",
+                  provider: "claude",
+                  excerpt: ORPHANED_BACKGROUND_REASON,
+                  label: "tracking lost",
+                },
+                noticeBlocker(db, delegation, turn, session),
+              ),
+            );
+          }
+        }
+      }
       return out;
     }
     case "UserPromptSubmit":

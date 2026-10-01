@@ -97,6 +97,24 @@ describe("unregistered and pending sessions", () => {
   });
 });
 
+describe("launcher-created directories", () => {
+  test("a worktree created after delegation is claimed, and delegations expose native handles", () => {
+    const wt = join(project, ".claude", "worktrees", "late");
+    const args = ["delegate", "--to", "claude", "--cwd", wt, "--name", "late-worktree", "--file", "-"];
+    expect(s.run(args, { as: LEAD, input: "Task" }).code).toBe(2);
+    const d = s.ok([...args, "--allow-missing-cwd"], { as: LEAD, input: "Task" });
+    mkdirSync(wt, { recursive: true });
+    const w: Worker = { workerId: d.workerId, requestId: d.requestId, contract: d.contract, sid: uuid() };
+    s.hook(
+      base(w, "UserPromptSubmit-probe", { prompt_id: uuid(), prompt: `Go.\n\n${w.contract}\n`, cwd: wt }),
+    );
+    s.ok(["session", "bind", w.workerId, "--external-id", w.sid, "--short-id", w.sid.slice(0, 8)]);
+    const view = phase(w);
+    expect(view.phase).toBe("working");
+    expect(view.worker).toEqual({ externalId: w.sid, shortId: w.sid.slice(0, 8), cwd: wt });
+  });
+});
+
 describe("delegated turn capture", () => {
   test("the hook command from the per-worker settings file captures the worker's turn", () => {
     const d = s.ok(
@@ -235,6 +253,42 @@ describe("delegated turn capture", () => {
     s.hook(base(w, "SessionEnd"));
     expect(notices(w).map((n: { kind: string }) => n.kind)).toEqual(["turn_interrupted"]);
     expect(phase(w)).toMatchObject({ phase: "interrupted", pendingQuestion: expect.anything() });
+  });
+
+  test("a resumed owner orphans the bound turn's background wait: tracking lost, not a silent pending", () => {
+    const w = delegateClaude("asker-respawn");
+    const p1 = claim(w);
+    const q = s.ok(["reply", w.requestId, "--type", "question", "--file", "-"], {
+      as: w.workerId,
+      input: "?",
+    });
+    s.hook(stop(w, p1, "waiting", [{ id: "bgw", type: "shell", status: "running" }]));
+    s.hook(base(w, "SessionStart", { source: "compact" }));
+    expect(phase(w).phase).toBe("question");
+    // Live 2.1.284: the daemon respawned a killed owner (source resume) without adopting its background tasks.
+    s.hook(base(w, "SessionStart", { source: "resume" }));
+    expect(notices(w).map((n: { kind: string }) => n.kind)).toEqual(["tracking_lost"]);
+    expect(phase(w)).toMatchObject({
+      phase: "unknown",
+      tracking: "lost",
+      pendingQuestion: { id: q.messageId },
+    });
+    s.hook(base(w, "SessionStart", { source: "resume" }));
+    expect(notices(w)).toHaveLength(1);
+  });
+
+  test("an earlier tracking loss becomes the permanent orphaned-wait loss on resume", () => {
+    const w = delegateClaude("asker-probe-first");
+    const p1 = claim(w);
+    s.ok(["reply", w.requestId, "--type", "question", "--file", "-"], { as: w.workerId, input: "?" });
+    s.hook(stop(w, p1, "waiting", [{ id: "bgw", type: "shell", status: "running" }]));
+    // As a probe in the respawn window would record it.
+    s.sqlWrite(
+      "UPDATE turn_bindings SET tracking = 'lost', tracking_reason = 'probe failed: x' WHERE delegation_id = ?",
+      w.requestId,
+    );
+    s.hook(base(w, "SessionStart", { source: "resume" }));
+    expect(phase(w).phaseReason).toContain("owner restarted");
   });
 
   test("manual prompts and unrelated task notifications are never attributed", () => {

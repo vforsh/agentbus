@@ -170,6 +170,16 @@ export class Store {
     }
   }
 
+  /** Direct write, only to stage evidence another component (for example a probe) would record. */
+  sqlWrite(query: string, ...params: (string | number)[]): void {
+    const db = new Database(join(this.stateDir, "agentbus.sqlite3"));
+    try {
+      db.query(query).run(...params);
+    } finally {
+      db.close();
+    }
+  }
+
   cleanup(): void {
     rmSync(this.dir, { recursive: true, force: true });
   }

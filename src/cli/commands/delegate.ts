@@ -29,6 +29,10 @@ export function registerDelegate(program: Command): void {
       "--cwd <dir>",
       "worker project directory, final path including any worktree (default: current directory)",
     )
+    .option(
+      "--allow-missing-cwd",
+      "--cwd does not exist yet; the launcher creates it (for example claude --worktree)",
+    )
     .option("--key <key>", "idempotency key; a retry returns the same worker, request and contract")
     .option("--summary <text>", "one-line summary")
     .option("--label <k=v>", "display label (repeatable)", collect, [])
@@ -43,6 +47,7 @@ export function registerDelegate(program: Command): void {
             file?: string;
             name?: string;
             cwd?: string;
+            allowMissingCwd?: boolean;
             key?: string;
             summary?: string;
             label: string[];
@@ -56,7 +61,7 @@ export function registerDelegate(program: Command): void {
           const summary = parseSummary(opts.summary);
           const key = parseKey(opts.key);
           const labels = parseLabels(opts.label);
-          const dir = canonicalDir(opts.cwd ?? process.cwd());
+          const dir = canonicalDir(opts.cwd ?? process.cwd(), { allowMissing: !!opts.allowMissingCwd });
           const db = ctx.db();
           const caller = requireCaller(db, ctx.opts.as);
 

@@ -230,6 +230,15 @@ export function getWaitArm(db: Db, id: string): WaitArmRow | null {
   return db.query<WaitArmRow, [string]>("SELECT * FROM wait_arms WHERE id = ?").get(id);
 }
 
+/** Retires every other unfinished wait of the session; each notices it on its next poll. */
+export function supersedeWaitArms(db: Db, sessionId: string, exceptId: string): number {
+  return db
+    .query(
+      "UPDATE wait_arms SET ended_at = ?, end_reason = 'superseded' WHERE session_id = ? AND id <> ? AND ended_at IS NULL",
+    )
+    .run(nowIso(), sessionId, exceptId).changes;
+}
+
 export function endWaitArm(db: Db, id: string, reason: string): void {
   db.query("UPDATE wait_arms SET ended_at = ?, end_reason = ? WHERE id = ? AND ended_at IS NULL").run(
     nowIso(),

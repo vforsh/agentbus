@@ -68,6 +68,23 @@ describe("wait", () => {
     s.ok(["ack", ...ids], { as: P });
   });
 
+  test("--replace retires the running wait, which exits superseded without claiming mail", async () => {
+    const open = () => s.sql("SELECT count(*) AS n FROM wait_arms WHERE ended_at IS NULL")[0].n as number;
+    const before = open();
+    const older = s.runAsync(["wait", "--timeout", "20s"], { as: P });
+    for (let i = 0; i < 100 && open() === before; i++) await sleep(50);
+    const newer = s.runAsync(["wait", "--replace", "--timeout", "10s"], { as: P });
+    const retired = await older;
+    expect(retired.code).toBe(0);
+    expect(retired.json?.data).toMatchObject({ reason: "superseded", messages: [], timedOut: false });
+    expect(retired.json?.data.recovery).toContain("do not re-arm");
+    const sent = s.ok(["send", P, "--file", "-"], { as: X, input: "for the newer wait" });
+    const r = await newer;
+    expect(r.json?.data.replaced).toBeGreaterThanOrEqual(1); // also counts arms abandoned by killed waits
+    expect(r.json?.data.messages.map((m: any) => m.id)).toEqual([sent.messageId]);
+    s.ok(["ack", sent.messageId], { as: P });
+  });
+
   test("--settled returns empty, attention early, then settled", async () => {
     const empty = s.ok(["wait", "--settled", "--timeout", "1s"], { as: P });
     expect(empty.reason).toBe("empty");

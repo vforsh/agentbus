@@ -79,6 +79,10 @@ export function turnHasExplicitReport(db: Db, turnId: string): string | null {
   return row?.id ?? null;
 }
 
+/** Tracking loss that a live owner does not repair: the background work belonged to a previous owner. */
+export const ORPHANED_BACKGROUND_REASON =
+  "worker owner restarted; background work of the previous owner (such as its Agentbus wait) can no longer re-invoke the session";
+
 /**
  * Notices for a turn are posted only while its delegation is open, the turn belongs to the worker's
  * current binding generation and no later turn continued it. Returns a suppression reason otherwise.

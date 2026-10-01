@@ -4,7 +4,14 @@ import { ATTENTION_NOTICES, type MessageType, type Phase } from "../protocol/typ
 import { type Db, dataVersion, tx } from "../store/db.ts";
 import { type DelegationRow, getDelegation, openDelegationsForParent } from "../store/delegations.ts";
 import { budget, type MessageRow, markSeen, selectInbox } from "../store/messages.ts";
-import { activeTurnForSession, endWaitArm, insertWaitArm, type WaitArmRow } from "../store/observations.ts";
+import {
+  activeTurnForSession,
+  endWaitArm,
+  getWaitArm,
+  insertWaitArm,
+  supersedeWaitArms,
+  type WaitArmRow,
+} from "../store/observations.ts";
 import { displayName, getSession, type SessionRow } from "../store/sessions.ts";
 import { sleep } from "../util/misc.ts";
 import { derivePhase, isSettled } from "./phase.ts";
@@ -19,6 +26,8 @@ export interface WaitOptions {
   correlation: string | null;
   limit: number;
   settled: boolean;
+  /** Retire the caller's other running waits: one watcher per session. */
+  replace: boolean;
 }
 
 export interface WaitOrigin {
@@ -40,9 +49,11 @@ export interface WaitResult {
   rows: MessageRow[];
   hasMore: boolean;
   timedOut: boolean;
-  reason: "messages" | "attention" | "settled" | "empty" | "timeout";
+  reason: "messages" | "attention" | "settled" | "empty" | "timeout" | "superseded";
   origin: WaitOrigin;
   batch: BatchMember[] | null;
+  /** Other running waits this one retired (--replace). */
+  replaced: number;
 }
 
 const POLL_MS = 250;
@@ -59,16 +70,22 @@ function originOf(arm: WaitArmRow): WaitOrigin {
 }
 
 /** Records the wait's origin when armed: the caller's current bound turn, if it is a worker in one. */
-function arm(db: Db, caller: SessionRow, correlation: string | null): WaitArmRow {
+function arm(
+  db: Db,
+  caller: SessionRow,
+  correlation: string | null,
+  replace: boolean,
+): { arm: WaitArmRow; replaced: number } {
   return tx(db, () => {
     const me = getSession(db, caller.id)!;
     const turn = activeTurnForSession(db, me.id, me.generation);
-    return insertWaitArm(db, {
+    const row = insertWaitArm(db, {
       sessionId: me.id,
       delegationId: turn?.delegation_id ?? null,
       turnRef: turn?.id ?? null,
       correlation,
     });
+    return { arm: row, replaced: replace ? supersedeWaitArms(db, me.id, row.id) : 0 };
   });
 }
 
@@ -100,7 +117,7 @@ export async function runWait(
 ): Promise<WaitResult> {
   const deadline = Date.now() + opts.timeoutMs;
   drainSpool(db, paths);
-  const armRow = arm(db, caller, opts.correlation);
+  const { arm: armRow, replaced } = arm(db, caller, opts.correlation, opts.replace);
   hooks.setArm?.(armRow.id);
   const origin = originOf(armRow);
 
@@ -111,17 +128,21 @@ export async function runWait(
       .filter((id) => !opts.correlation || id === opts.correlation);
     if (snapshot.length === 0) {
       endWaitArm(db, armRow.id, "empty");
-      return { rows: [], hasMore: false, timedOut: false, reason: "empty", origin, batch: [] };
+      return { rows: [], hasMore: false, timedOut: false, reason: "empty", origin, batch: [], replaced };
     }
   }
 
-  const finish = (r: Omit<WaitResult, "origin">): WaitResult => {
+  const finish = (r: Omit<WaitResult, "origin" | "replaced">): WaitResult => {
     endWaitArm(db, armRow.id, r.reason);
-    return { ...r, origin };
+    return { ...r, origin, replaced };
   };
 
-  const attempt = (): Omit<WaitResult, "origin"> | null => {
+  const attempt = (): Omit<WaitResult, "origin" | "replaced"> | null => {
     const picked = tx(db, () => {
+      // Checked in the claiming transaction: a superseded wait never marks mail seen.
+      if (getWaitArm(db, armRow.id)?.end_reason === "superseded") {
+        return { rows: [], hasMore: false, reason: "superseded" as const, batch: null };
+      }
       const unseen = selectInbox(db, {
         recipientId: caller.id,
         includeAcknowledged: false,
