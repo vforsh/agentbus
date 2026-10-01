@@ -30,7 +30,7 @@ agentbus delegate --to codex --name executor --cwd /abs/project --key task-001 \
 # -> workerId, requestId, contract, returnPath, returnPathStatus=setup_required
 ```
 
-Launchers (`claude-to-codex`, `codex-to-claude`, `claude-threads`) append `contract` to the worker prompt, spawn the worker, then confirm with `agentbus session bind <workerId> --external-id <native-uuid>`. Do not spawn twice for one request; a crash after spawning needs reconciliation, not a second launch.
+Launchers (`claude-to-codex`, `codex-to-claude`, `claude-threads`) append `contract` to the worker prompt, spawn the worker (Claude workers with `--settings <claudeSettings>`), then confirm with `agentbus session bind <workerId> --external-id <native-uuid>`. Do not spawn twice for one request; a crash after spawning needs reconciliation, not a second launch.
 
 **Claude parent — one background wait for everything.** After delegating, run as a background command and end the turn:
 
@@ -73,7 +73,7 @@ Your prompt carries an `<agentbus-contract version="1">` block. Follow it exactl
 ## Setup and diagnostics
 
 - `agentbus doctor` — read-only readiness (store schema, spool backlog, hook installation and pinned store, provider CLIs, caller).
-- `agentbus hooks claude install|uninstall|status|print [--dry-run]` — user-level Claude hooks that capture worker turns (SessionStart, UserPromptSubmit, PermissionRequest, Stop, StopFailure, SessionEnd). They print nothing and always exit 0.
+- Claude workers are observed through per-worker hooks: start them with `claude --bg --settings <claudeSettings>` from the `delegate` receipt. After a Desktop handoff only explicit replies and `--probe` remain. `agentbus hooks claude install|uninstall|status|print [--dry-run]` manages an optional user-level install that also covers handed-off sessions but runs in every Claude session.
 - `agentbus config set codexBin=/path claudeBin=/path`, `config get|unset|import|export|path|ls`.
 - `agentbus status [<session>] [--probe]`, `agentbus event drain`.
 

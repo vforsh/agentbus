@@ -37,17 +37,15 @@ State lives in `${XDG_STATE_HOME:-~/.local/state}/agentbus/` (internal disk, `07
 
 ### Claude hooks
 
-Worker turn capture needs user-level hooks in `~/.claude/settings.json`. Install is idempotent, preserves unrelated entries and writes a private backup next to the file:
+Hooks run only in Agentbus's own Claude workers; `~/.claude/settings.json` is not touched. `agentbus delegate --to claude` writes a private settings file and returns its path as `claudeSettings`; the launcher starts the worker with it:
 
 ```bash
-agentbus hooks claude install --dry-run
+claude --bg --settings "$claudeSettings" ...
 ```
 
-```bash
-agentbus hooks claude install
-```
+The file subscribes `SessionStart`, `UserPromptSubmit`, `PermissionRequest`, `Stop`, `StopFailure` and `SessionEnd`. Each entry pins the absolute Bun runtime, CLI path, store and config, guarded so an unmounted checkout volume is a silent no-op. Hooks print nothing and always exit 0. `agentbus hooks claude print [--settings-file <path>]` shows or writes the same settings.
 
-Each entry pins the absolute Bun runtime, CLI path, store and config, guarded so an unmounted checkout volume is a silent no-op. Hooks print nothing, always exit 0, and do one read-only lookup (~31 ms measured) for sessions Agentbus does not know. `agentbus hooks claude status` verifies; `uninstall` removes only Agentbus-owned entries.
+Observation scope is the background owner, as with the Codex runner: after a Desktop handoff the resumed session does not carry `--settings`, so lifecycle notices stop and the worker's explicit `question`/`result` replies plus `--probe` remain. An optional user-level install (`agentbus hooks claude install|uninstall|status [--dry-run]`) extends capture across the handoff at the cost of running the hook, one ~31 ms read-only lookup, in every Claude session; it preserves unrelated entries and writes a private backup.
 
 ### Config keys
 

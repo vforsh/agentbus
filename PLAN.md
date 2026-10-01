@@ -48,7 +48,7 @@ Every delegation has a **parent** (the requester) and a **worker** (the recipien
 | | Claude | Codex |
 | --- | --- | --- |
 | **As worker: launched by** | `codex-to-claude` or `claude-threads` → `claude --bg` | `claude-to-codex` → detached runner around `codex exec` |
-| **As worker: observed through** | User-level Claude hooks, across the Desktop handoff | The runner, while `codex exec` owns the thread |
+| **As worker: observed through** | Per-worker Claude hooks from `--settings`, while the background owner runs it | The runner, while `codex exec` owns the thread |
 | **As worker: follow-up delivery** | Live session: the worker arms a background wait after asking | In-turn wait, or the parent resumes the thread with `codex exec resume` |
 | **As parent: woken by** | One background `agentbus wait`, covering all its delegations | A heartbeat on the original chat; automatic wake is milestone 6 |
 | **As parent: identity** | `CLAUDE_CODE_SESSION_ID` in Desktop sessions, otherwise explicit | `CODEX_THREAD_ID` |
@@ -64,7 +64,7 @@ First release (milestones 1–4):
 3. Repeating a send or delegation with the same sender and idempotency key returns the original IDs and contract, even after task closure; changing its intent produces a conflict. A retry does not launch a second worker.
 4. Reading or waiting does not acknowledge a message. `read`, including `--unseen`, never changes receipts. `wait` atomically marks its returned batch seen; every consumer also recovers unacknowledged mail after a lost output, restart or timeout, without a client-side cursor.
 5. Observed permission requests, turn failures, interruptions, tracking loss and normal turn ends produce distinct notices. Repeated permission requests in one prompt are preserved. Finishing a turn never means the task succeeded; only a worker-authored `result` carries an outcome. The support matrix names provider prompt types the selected hooks do not cover.
-6. With a writable compatible store, a delegated Claude turn's final response reaches the parent's inbox through the hook alone, including after Desktop handoff, unless an explicit question/result already replaces that finish notice. Otherwise an eligible captured event is spooled and later drained, or an observation gap is surfaced when diagnosable; successful spooling is not yet inbox delivery.
+6. With a writable compatible store, a delegated Claude turn's final response reaches the parent's inbox through the worker's per-worker hook alone while its background owner runs it (after a Desktop handoff only with the optional user-level install), unless an explicit question/result already replaces that finish notice. Otherwise an eligible captured event is spooled and later drained, or an observation gap is surfaced when diagnosable; successful spooling is not yet inbox delivery.
 7. When a delegated `codex exec` run finishes or fails, the parent's inbox contains Codex's final message or the failure, reported by the runner.
 8. Later turns that were not started for the delegation are not attributed to it: a manual Claude prompt, an unrelated background-task completion, or a Codex turn outside the runner. Delayed spool events cannot rebind a newer turn.
 9. A Codex parent collects the result after its initial turn has ended, through a heartbeat or a verified wake adapter. A missing adapter leaves the message available and reports the missing capability.
@@ -340,7 +340,7 @@ Milestone 6 adds `send --wake`, `wake <session> --message <id>` and `worker run|
 | `session bind` | Set the native ID and adapter binding of a pending session, or confirm an existing token claim; a different existing ID is a conflict. |
 | `session list/show` | Read session metadata; never probe providers. |
 | `session update` | Update display metadata, labels or explicit provider/return binding via `--binding-file`; provider and native identity are immutable. Validate handles and ownership before accepting binding changes. |
-| `delegate` | Caller is the parent. Create a pending worker for the provider, send the request and open the delegation in one transaction; optional `--name`, `--cwd`, `--key`, `--summary` and `--label`. Return `workerId`, `requestId`, `returnPath` and `contract`, the worker instructions for that provider; `--contract-out <path>` also writes it to a file. Retrying with the same `--key` returns the same IDs. |
+| `delegate` | Caller is the parent. Create a pending worker for the provider, send the request and open the delegation in one transaction; optional `--name`, `--cwd`, `--key`, `--summary` and `--label`. Return `workerId`, `requestId`, `returnPath`, `contract` and, for Claude workers, `claudeSettings` (the per-worker hook file for `claude --bg --settings`), the worker instructions for that provider; `--contract-out <path>` also writes it to a file. Retrying with the same `--key` returns the same IDs. |
 | `delegations` | Caller's delegations as a parent: worker name, provider, labels, phase, outcome, latest summary, age and pending question. Default: open ones plus those closed in the last 24 hours; `--all` for history. Targets show one delegation in detail. `--probe` adds live activity, plus Claude job `detail` and `needs` read from `~/.claude/jobs/<short-id>/state.json`. |
 | `send` | Require `--file`; optional `--type message\|request`, `--key` and `--summary`. Default type `message`. A `request` opens a delegation. |
 | `reply` | Body, summary and retry flags as above; `--type message\|progress\|question\|result` and `--outcome` (required only for result). Derive destination and correlation and enforce the role rules. |
@@ -351,7 +351,7 @@ Milestone 6 adds `send --wake`, `wake <session> --message <id>` and `worker run|
 | `status` | Mailbox counts and spool backlog; with a session, its latest observations. `--probe` adds live Claude activity and owner from `claude agents --all --json`; without it, no provider subprocess runs. |
 | `event ingest` | Entry point for Claude hooks (`--source hook`, payload on stdin) and the Codex runner (`--source runner`, normalized event file). See Provider adapters. |
 | `event drain` | Ingest spooled events. `read`, `wait`, `delegations` and `status` also drain before reading. |
-| `hooks claude` | `print` emits the settings snippet. `install` merges it into `~/.claude/settings.json` idempotently and writes a private backup. Preserve unrelated entries, verify the file has not changed since reading, then replace atomically; malformed or concurrently edited settings fail without replacement. `uninstall` removes only exact Agentbus-owned entries. Both support `--dry-run`; `status` verifies without writing. Only explicit install/uninstall changes provider settings. |
+| `hooks claude` | `print` emits the settings snippet, or writes a standalone per-worker file with `--settings-file`; `delegate --to claude` writes one per worker automatically. Optional `install` merges it into `~/.claude/settings.json` idempotently and writes a private backup. Preserve unrelated entries, verify the file has not changed since reading, then replace atomically; malformed or concurrently edited settings fail without replacement. `uninstall` removes only exact Agentbus-owned entries. Both support `--dry-run`; `status` verifies without writing. Only explicit install/uninstall changes provider settings. |
 | `config` | Support non-interactive setup, batched set/get/unset, stdin JSON import and JSON export. |
 | `doctor` | Read-only readiness checks with remediation, including hook installation, spool backlog and schema version; never start a daemon, log in, drain the spool or rewrite provider settings. |
 | `skill` | Print the real repository skill installation URL after the repository exists; fail clearly while its URL is unconfigured. |
@@ -431,9 +431,9 @@ Store provider executable paths in config; add wake strategy names in milestone 
 
 ### Claude hooks
 
-Install hooks in user settings (`~/.claude/settings.json`), which already contains the user's own hooks, so CLI background sessions and Desktop-resumed sessions load the same entries. Do not rely on `--settings` passed only to the initial process. Milestone 3 verifies both owners.
+Hooks are per worker by default (decision of 2026-10-01): `delegate --to claude` writes a private settings file under `<state-dir>/workers/<worker-id>/claude-settings.json` and returns it as `claudeSettings`; launchers start the worker with `claude --bg --settings <file>`. No other Claude session runs Agentbus code and `~/.claude/settings.json` is untouched. The earlier experiment confirmed `--settings` hooks fire in `--bg` sessions. The tracking scope matches the Codex runner: lifecycle capture is required while the background owner runs the worker; after a Desktop handoff the resumed session lacks `--settings`, so observation falls back to explicit replies and probes. An optional user-level install (`hooks claude install`) extends capture across the handoff for users who accept a hook in every session.
 
-Subscribe only to low-frequency events: `SessionStart`, `UserPromptSubmit`, `PermissionRequest`, `Stop`, `StopFailure` and `SessionEnd`. Skip tool-use and `SubagentStop` events: user hooks run in every Claude session on the machine, including unrelated ones, and progress belongs in explicit replies.
+Subscribe only to low-frequency events: `SessionStart`, `UserPromptSubmit`, `PermissionRequest`, `Stop`, `StopFailure` and `SessionEnd`. Skip tool-use and `SubagentStop` events: progress belongs in explicit replies, and an optional user-level install would run them in every session.
 
 Hook command contract:
 
@@ -454,7 +454,7 @@ Hook stdout stays empty throughout v1. Optional context injection belongs to a l
 
 `claude agents --all --json` rows have been observed with `id`, `sessionId`, `kind`, `state`, `name`, `cwd` and `startedAt`; live rows add `pid` and `status`, which the launcher's `desktop.sh` uses. Use the returned short `id` rather than deriving a future protocol from its current 8-character format. `~/.claude/jobs/<short-id>/state.json` adds `detail` and `needs`; this undocumented file is optional diagnostic enrichment, not a lifecycle dependency. Validate rows, match the exact `sessionId`, and treat absent fields or rows as unknown. Batch one provider inventory per probe cycle across all children and tolerate additive fields; reject missing required identity fields without fabricating state.
 
-The `codex-to-claude` Desktop helper polls every 5 seconds, waits for `state=done` and an idle status, stops the background owner and opens the same session through `claude://resume`. It remains the only handoff controller. Agentbus needs no handoff logic: user-level hooks keep firing after the transfer and are filtered by UUID, and probes report the observed owner. `claude-threads` imports children into the Desktop sidebar while the background process keeps owning them; that does not affect Agentbus.
+The `codex-to-claude` Desktop helper polls every 5 seconds, waits for `state=done` and an idle status, stops the background owner and opens the same session through `claude://resume`. It remains the only handoff controller. Agentbus needs no handoff logic: per-worker hooks stop at the transfer (optional user-level hooks keep firing, filtered by UUID), and probes report the observed owner. `claude-threads` imports children into the Desktop sidebar while the background process keeps owning them; that does not affect Agentbus.
 
 **Observed launcher defect.** In the earlier experiment, a turn that used a background command remained `state: working`, `status: idle` for over five minutes; the control reached `done`. The helper's `state=done` condition can therefore stall. Milestone 4 replaces it with a fresh positive idle probe plus a Stop from the current binding generation whose background-task and scheduled-wakeup lists are known and empty. Missing/stale lists are not empty. Recheck immediately before releasing ownership; a result alone is insufficient, and terminal lifecycle capture must continue after that result. Verify this rule with a running wait, a completed wait, a scheduled wakeup and a manual follow-up arriving during handoff.
 
@@ -692,7 +692,7 @@ Exit condition: the mailbox satisfies acceptance criteria 1–4 with provider ad
 
 - Run the remaining Claude checks first, with disposable sessions:
   - The session UUID survives Desktop resume; new prompt IDs remain observable and correctly associated with their own turns.
-  - User-level hooks (not `--settings`) fire under both owners.
+  - Per-worker `--settings` hooks fire under the background owner; confirm they stop after Desktop resume (optional user-level hooks: confirm they continue).
   - A background wait armed in a Desktop-owned session re-invokes it.
   - `SessionEnd` fires on `claude stop` of a working session.
   - Task-notification provenance distinguishes delegated waits from unrelated background tasks; timeout and completion-before-Stop cases remain attributable.
@@ -807,7 +807,7 @@ Use disposable provider sessions for live adapter checks. Collect the native IDs
 
 None block the provider-independent mailbox milestone. Failed checks block the corresponding automatic delivery claim; they are not silently waived:
 
-- Do the session UUID, user-level hooks and `prompt_id` behave the same after Claude Desktop resume? (3)
+- Does the session UUID and `prompt_id` behave the same after Claude Desktop resume, and do per-worker `--settings` hooks stop there as expected? (3)
 - Does a background wait armed in a Desktop-owned Claude session re-invoke it? (3)
 - Can a task notification be positively associated with its originating delegated task, including completion before Stop and after unrelated manual input? (3)
 - Does `SessionEnd` fire when a working Claude session is stopped mid-turn, and what does `claude agents` show after `kill -9`? (3)
@@ -846,6 +846,10 @@ The following experiments were recorded by the earlier plan on 2026-09-30 with C
 `claude-threads` documents further facts verified with Claude desktop 2.16120: model-classified `done`/`blocked`/`working` states, `notify_when_idle` arriving late, and edit refusals in shared checkouts. They informed the phase model and the decision to keep the isolation rule in the skill.
 
 ## Revision log
+
+2026-10-01, per-worker Claude hooks:
+
+- User-level hook installation became optional. `delegate --to claude` writes a per-worker settings file for `claude --bg --settings`, so Agentbus code runs only in its own workers. Lifecycle observation of a Claude worker is guaranteed while its background owner runs it; after a Desktop handoff it relies on explicit replies and probes, matching the Codex worker scope.
 
 2026-10-01, correctness review:
 
