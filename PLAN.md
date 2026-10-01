@@ -842,6 +842,9 @@ The following experiments were recorded by the earlier plan on 2026-09-30 with C
 | Hook cold path | Bun start plus read-only SQLite lookup: 10–20 ms | Target 50 ms |
 | Names | `@vforsh/agentbus` free on npm; unscoped `agentbus` taken | Keep the scoped name; recheck at publish |
 | Cited links | All return HTTP 200 | No changes |
+| Live check 2026-10-01, five Haiku `--bg` workers with per-worker `--settings` hooks (Claude Code 2.1.284) | Contract `UserPromptSubmit` claimed each pending worker; a result was attributed to its bound turn and its later Stop posted nothing; a worker without a result produced a `turn_finished` notice with its final text; a question suppressed the Stop notice, the worker's own background `agentbus wait` woke it after the parent answered and the task notification was proven a continuation through the wait receipt | Per-worker hooks, claim, notice suppression and background-wait follow-ups confirmed live |
+| Same run: permission and stop | `PermissionRequest` carried `prompt_id`; the inventory row showed `status: waiting`, `waitingFor: "permission prompt"`, `state: blocked`; `claude stop` during the prompt fired `SessionEnd` (`reason: other`) → `turn_interrupted` | Exact permission attribution works; mid-turn stop interrupts |
+| Same run: `kill -9` of the owner (`claude bg-spare`) | No hook fired; the `claude agents` row stayed `state: working` with no `pid` or `status`; the probe's recorded PID+start identity confirmed death → `turn_interrupted` | Provider state goes stale after a crash; identity-based probes are required |
 
 `claude-threads` documents further facts verified with Claude desktop 2.16120: model-classified `done`/`blocked`/`working` states, `notify_when_idle` arriving late, and edit refusals in shared checkouts. They informed the phase model and the decision to keep the isolation rule in the skill.
 

@@ -165,8 +165,12 @@ Runs Biome lint, `tsc --noEmit` (TypeScript 7), `test:integration` (mailbox, del
 
 Recorded evidence lives in `tests/fixtures/` (Claude Code 2.1.284, Codex CLI 0.157.1); `*.synthetic.json` files follow the documented hook shapes where no live capture exists yet.
 
-### Open live checks (milestone 3–4 gates)
+### Live checks
 
-- Claude: session UUID, hooks and `prompt_id` across Desktop resume; background wait re-invocation in a Desktop-owned session; `SessionEnd` on `claude stop` mid-turn; `claude agents` after `kill -9`; real `PermissionRequest` payloads.
+Verified on 2026-10-01 with five disposable Haiku `--bg` workers using per-worker `--settings` hooks (see PLAN "Pre-implementation evidence"): contract claim, result attribution and Stop suppression, fallback `turn_finished`, question → background-wait wake-up → result, `PermissionRequest` with `prompt_id`, `claude stop` mid-turn → `turn_interrupted`, and `kill -9` → stale `claude agents` row but probe-confirmed `turn_interrupted`.
+
+Still open:
+
+- Claude: session UUID and `prompt_id` across Desktop resume, and whether per-worker `--settings` hooks stop there; background wait re-invocation in a Desktop-owned session.
 - Codex: `codex exec resume` keeps the thread ID; `CODEX_THREAD_ID` in Desktop tool shells; heartbeat create/run/cleanup.
 - Launchers: durable launch manifests, cross-run ownership lock and persisted Desktop-open marker in `claude-to-codex`; fresh-idle handoff guard in `codex-to-claude`.
