@@ -2,7 +2,7 @@ import type { Outcome, Phase } from "../protocol/types.ts";
 import type { Db } from "../store/db.ts";
 import type { DelegationRow } from "../store/delegations.ts";
 import { type MessageRow, messagesInCorrelation } from "../store/messages.ts";
-import { latestTurn, type TurnRow } from "../store/observations.ts";
+import { latestTurn, launchFailure, type TurnRow } from "../store/observations.ts";
 import { getSession } from "../store/sessions.ts";
 import { unresolvedQuestion } from "./mailbox.ts";
 
@@ -60,6 +60,15 @@ export function derivePhase(db: Db, d: DelegationRow): PhaseInfo {
   if (!turn) {
     // Messages-only derivation: generic workers and Claude/Codex workers before their first bound turn.
     const lastWorker = [...msgs].reverse().find((m) => m.from_id === d.worker_id);
+    const failure = worker ? launchFailure(db, d.request_id, worker.generation) : null;
+    if (failure) {
+      const reason = (JSON.parse(failure.detail) as { reason?: string }).reason;
+      return phase(
+        "interrupted",
+        reason ?? "worker session ended before claiming the request",
+        failure.captured_at,
+      );
+    }
     if (question) return phase("question", "worker asked a question", question.created_at);
     const answer = latestAnswer(msgs, d);
     if (answer && (!lastWorker || answer.sequence > lastWorker.sequence)) {

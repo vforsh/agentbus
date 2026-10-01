@@ -155,6 +155,15 @@ export function observationExists(db: Db, id: string, occurrenceKey: string | nu
     .get(occurrenceKey);
 }
 
+/** The probe's record that the worker session ended before its first bound turn in this binding generation. */
+export function launchFailure(db: Db, delegationId: string, generation: number): ObservationRow | null {
+  return db
+    .query<ObservationRow, [string, number]>(
+      "SELECT * FROM observations WHERE delegation_id = ? AND generation = ? AND kind = 'launch_failed' ORDER BY captured_at DESC, rowid DESC LIMIT 1",
+    )
+    .get(delegationId, generation);
+}
+
 export interface InsertObservation {
   id: string;
   occurrenceKey: string | null;

@@ -20,6 +20,7 @@ export const NOTICE_KINDS = [
   "turn_interrupted",
   "permission_request",
   "tracking_lost",
+  "launch_failed",
 ] as const;
 export type NoticeKind = (typeof NOTICE_KINDS)[number];
 
@@ -29,6 +30,7 @@ export const ATTENTION_NOTICES: ReadonlySet<string> = new Set([
   "turn_interrupted",
   "permission_request",
   "tracking_lost",
+  "launch_failed",
 ]);
 
 export interface NoticeMeta {

@@ -12,7 +12,7 @@ import { identify, type Liveness, liveness, type ProcessIdentity } from "../adap
 import type { Resolved } from "../config/config.ts";
 import { type Db, tx } from "../store/db.ts";
 import { type DelegationRow, getDelegation } from "../store/delegations.ts";
-import { getTurn, latestTurn, type TurnRow, updateTurn } from "../store/observations.ts";
+import { getTurn, latestTurn, launchFailure, type TurnRow, updateTurn } from "../store/observations.ts";
 import { getSession, patchAdapterBinding, type SessionRow } from "../store/sessions.ts";
 import { newId, nowIso } from "../util/misc.ts";
 import { noticeBlocker, ORPHANED_BACKGROUND_REASON, record } from "./observe.ts";
@@ -30,6 +30,9 @@ export interface ProbeReport {
   needs?: unknown;
   noticeId?: string | null;
 }
+
+/** `claude agents` row states of a session that is no longer running. */
+const ENDED_STATES: ReadonlySet<string> = new Set(["failed", "done", "stopped"]);
 
 /** Turns whose activity matters: active, prepared, or ended with delegated background work running. */
 const needsTracking = (t: TurnRow): boolean =>
@@ -137,6 +140,23 @@ function probeClaude(
       ? (binding.process as ProcessIdentity | null | undefined)
       : undefined;
   const life: Liveness = rows.length > 0 ? liveness(recorded) : "unknown";
+  // A session that ended before claiming its request has no bound turn to interrupt; without this the
+  // delegation would stay `pending` forever (e.g. `claude --bg` exiting before init).
+  if (!turn && rows.length > 0 && rows.every((r) => r.state !== null && ENDED_STATES.has(r.state))) {
+    const job = jobs ?? readJobState(paths.claudeJobsDir, shortId);
+    const state = rows[0]!.state!;
+    const reason = `worker session ${state} before claiming the request${job?.detail ? `: ${job.detail}` : ""}`;
+    const noticeId = launchFailed(db, d, worker, reason, state);
+    return {
+      ...base,
+      evidence: "confirmed_dead",
+      activity: "stopped",
+      owner: ownerOf(rows[0]!.kind),
+      reason,
+      noticeId,
+      ...(job ? { detail: job.detail, needs: job.needs } : {}),
+    };
+  }
   if (!turn || !needsTracking(turn)) {
     return {
       ...base,
@@ -342,6 +362,44 @@ function interrupt(
         label: "turn interrupted",
       },
       noticeBlocker(db, delegation, t, w),
+    );
+    return r.noticeId;
+  });
+}
+
+function launchFailed(
+  db: Db,
+  d: DelegationRow,
+  worker: SessionRow,
+  reason: string,
+  sessionState: string,
+): string | null {
+  return tx(db, () => {
+    const w = getSession(db, worker.id);
+    const delegation = getDelegation(db, d.request_id);
+    // Stale probe: the worker was rebound or claimed the request since the inventory was read.
+    if (!w || !delegation || w.generation !== worker.generation) return null;
+    if (latestTurn(db, d.request_id, w.generation) || launchFailure(db, d.request_id, w.generation))
+      return null;
+    const r = record(
+      db,
+      {
+        id: newId(),
+        occurrenceKey: `probe:${d.request_id}:${w.generation}:launch_failed`,
+        sessionId: w.id,
+        delegationId: d.request_id,
+        turnRef: null,
+        generation: w.generation,
+        source: "probe",
+        kind: "launch_failed",
+        nativeEvent: null,
+        nativeTurnId: null,
+        capturedAt: nowIso(),
+        detail: { reason, sessionState },
+      },
+      delegation,
+      { kind: "launch_failed", provider: "claude", excerpt: reason, label: "launch failed" },
+      delegation.state === "open" ? null : "delegation_closed",
     );
     return r.noticeId;
   });

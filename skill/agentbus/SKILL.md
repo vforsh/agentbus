@@ -42,7 +42,7 @@ It covers every delegation of this parent, including ones created later. On each
 
 **Codex parent — heartbeat.** If the app's automation tool exists and monitoring is in scope, create or reuse one heartbeat on the original chat (persist its ID). Its static prompt: run the recovery `read` sweep, optionally a short `wait --timeout 2m`, report only real changes (question, result, attention notice), ack handled mail, stay quiet otherwise. Delete it after all delegations are closed and handled. Without the tool, say delivery is manual and poll with `agentbus read`.
 
-**Batches.** `agentbus wait --settled --replace --timeout 30m --json` snapshots currently open delegations: returns `reason: attention` immediately for questions and permission/failure/interruption/tracking-loss notices, `reason: settled` when every member is done/closed/idle, `reason: empty` if none were open. Answer attention items before re-arming.
+**Batches.** `agentbus wait --settled --replace --timeout 30m --json` snapshots currently open delegations: returns `reason: attention` immediately for questions and permission/failure/interruption/tracking-loss/launch-failure notices, `reason: settled` when every member is done/closed/idle, `reason: empty` if none were open. Answer attention items before re-arming.
 
 **Answering a question.** `agentbus reply <question-id> --key answer-<question-id> --file answer.md`. Acking a question does not answer it. Claude workers wake through their own background wait; for a Codex worker whose run ended, resume the same thread through the launcher (`spawn.sh --resume <threadId>`), never while its run is active or after Desktop may own it.
 
@@ -55,7 +55,7 @@ It covers every delegation of this parent, including ones created later. On each
 | `permission` | Worker hit a provider permission prompt (last known) | Tell the user; the prompt belongs to them |
 | `question` | Worker asked; unresolved until you reply to that question ID | Answer |
 | `idle` | Turn ended without a result | Read the `turn_finished` notice; follow up or close |
-| `interrupted` | Latest turn failed or its process positively died | Decide: retry with a fresh request or close |
+| `interrupted` | Latest turn failed or its process positively died, or the session ended before claiming the request (`launch_failed` notice: read its body for the cause) | Decide: retry with a fresh request or close |
 | `unknown` | Tracking lost, binding superseded by manual input, or the worker's owner restarted and orphaned its background wait | Investigate; do not take over files. Restarted owner: nudge the worker through its provider (Claude: `SendMessage`) to run its contract's read command |
 | `done` | Worker published a result (outcome shown) | Verify the worker is idle before editing its files |
 | `closed` | Closed by the parent | — |

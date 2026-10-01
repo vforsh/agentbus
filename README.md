@@ -155,6 +155,7 @@ Kinds: `run_started` (before exec; `resumeThreadId` for resumes), `child_started
 | Final response | `Stop.last_assistant_message` notice (fixture-verified) | Runner `run_finished` final message | — | — |
 | Failure | `StopFailure` → `turn_failed` | Nonzero/incomplete run → `turn_failed` | — | — |
 | Interruption | `SessionEnd` during an open turn; `--probe` PID+start death | Signal; `--probe` runner+child death | — | — |
+| Launch failure | `--probe`: bound session listed as `failed`/`done`/`stopped` before any claimed turn → `launch_failed` (phase `interrupted`, job `detail` in the body) | — | — | — |
 | Permission prompts | `PermissionRequest` (tool name + description only) | Not raised (`approval_policy=never`) | — | — |
 | Follow-up delivery | Worker's own background wait | In-turn wait, or parent resumes thread via launcher | — | — |
 | Wake-up | — | — | Background `agentbus wait` | Heartbeat (app tool; not callable from CLI) |
