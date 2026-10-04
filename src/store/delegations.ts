@@ -58,7 +58,12 @@ export function insertDelegation(db: Db, d: InsertDelegation): DelegationRow {
   return getDelegation(db, d.requestId)!;
 }
 
-/** First terminal transition wins: the update only applies while the delegation is still open. */
+/**
+ * First terminal transition wins: the update only applies while the delegation is still open. The same
+ * transition settles mail nobody needs to handle any more (receipts acknowledged with a `settled_reason`):
+ * a result settles the worker's side (request, follow-ups, answers), a parent's close settles the whole
+ * correlation. A result's own receipt is the parent's to acknowledge and is never settled.
+ */
 export function closeDelegation(
   db: Db,
   requestId: string,
@@ -66,31 +71,37 @@ export function closeDelegation(
   outcome: Outcome | null,
   resultId: string | null,
 ): boolean {
+  const now = nowIso();
   const res = db
     .query(
       "UPDATE delegations SET state = ?, outcome = ?, result_id = ?, closed_at = ? WHERE request_id = ? AND state = 'open'",
     )
-    .run(state, outcome, resultId, nowIso(), requestId);
-  return res.changes > 0;
+    .run(state, outcome, resultId, now, requestId);
+  if (res.changes === 0) return false;
+  db.query(
+    `UPDATE receipts SET acknowledged_at = $now, seen_at = coalesce(seen_at, $now), settled_reason = $reason
+     WHERE acknowledged_at IS NULL
+       AND message_id IN (SELECT id FROM messages WHERE correlation_id = $request)
+       AND ($state = 'closed' OR recipient_id = (SELECT worker_id FROM delegations WHERE request_id = $request))`,
+  ).run({ now, reason: `delegation_${state}`, request: requestId, state });
+  return true;
 }
 
 export interface ParentFilter {
-  parentId: string;
+  /** null lists every parent's delegations. */
+  parentId: string | null;
   includeAll: boolean;
   recentSinceIso: string;
 }
 
 export function delegationsForParent(db: Db, f: ParentFilter): DelegationRow[] {
-  if (f.includeAll) {
-    return db
-      .query<DelegationRow, [string]>("SELECT * FROM delegations WHERE parent_id = ? ORDER BY opened_at")
-      .all(f.parentId);
-  }
   return db
-    .query<DelegationRow, [string, string]>(
-      "SELECT * FROM delegations WHERE parent_id = ? AND (state = 'open' OR closed_at >= ?) ORDER BY opened_at",
+    .query<DelegationRow, [Record<string, string | number | null>]>(
+      `SELECT * FROM delegations
+       WHERE ($parent IS NULL OR parent_id = $parent) AND ($all OR state = 'open' OR closed_at >= $since)
+       ORDER BY opened_at`,
     )
-    .all(f.parentId, f.recentSinceIso);
+    .all({ parent: f.parentId, all: f.includeAll ? 1 : 0, since: f.recentSinceIso });
 }
 
 export function openDelegationsForParent(db: Db, parentId: string): DelegationRow[] {

@@ -1,8 +1,8 @@
 import { CommanderError } from "commander";
 
 /**
- * Hook fast path: `event ingest --provider claude --source hook` must stay silent and quick, so it is
- * dispatched before the full CLI loads. Returns the pinned store flags when argv matches.
+ * Hook fast path: `event ingest --provider claude --source hook` must stay quick and print nothing but a
+ * doorbell decision, so it is dispatched before the full CLI loads. Returns the pinned store flags when argv matches.
  */
 function hookArgs(argv: string[]): { stateDir?: string; config?: string } | null {
   const args = argv.slice(2);

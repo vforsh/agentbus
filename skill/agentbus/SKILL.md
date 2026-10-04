@@ -9,7 +9,8 @@ Local, durable mailbox between agent sessions. One OS user, one host; identities
 
 ## Core rules
 
-- **Reading never consumes.** `read` (also `--unseen`) changes nothing. `wait` marks only the batch it returns as *seen*. Only `ack` accepts responsibility.
+- **Reading never consumes.** `read` (also `--unseen`) changes nothing. `wait` (and the Claude worker doorbell) marks only what it delivers as *seen*. Only `ack` accepts responsibility.
+- **A delegation's end settles leftovers.** A result settles the worker's unacked mail of that delegation; `close` settles the whole delegation, both sides. Settled receipts read as acknowledged with `settledReason` (`delegation_done|delegation_closed`). The result itself stays yours to ack.
 - **Recover on every wake.** At startup and after every wait exit (message, timeout exit 3, error, kill), run a paginated `agentbus read --json` sweep (follow `hasMore` with `--after <cursor>`) before handling new output or re-arming. Seen-but-unacked mail may be handled twice; give side effects their own `--key`.
 - **Retry with keys.** Automated sends/replies/delegations pass a stable `--key`; a retry returns the original IDs, a changed intent fails with exit 5. A keyed `delegate` retry never authorizes a second model launch.
 - **Outcomes come only from `result`.** A finished turn (`notice/turn_finished`) is not success. Only a worker `result` carries `success|blocked|failed|unknown`, and every result closes the delegation.
@@ -44,9 +45,11 @@ It covers every delegation of this parent, including ones created later. On each
 
 **Batches.** `agentbus wait --settled --replace --timeout 30m --json` snapshots currently open delegations: returns `reason: attention` immediately for questions and permission/failure/interruption/tracking-loss/launch-failure notices, `reason: settled` when every member is done/closed/idle, `reason: empty` if none were open. Answer attention items before re-arming.
 
+**Follow-ups to a working worker.** `agentbus send <workerId> --summary "..." --file -` while its delegation is open joins that delegation (same `correlationId`). A running Claude worker sees it after its next tool call, or its attempt to end the turn is turned back until it reads it (doorbell hook, workers delegated by agentbus ≥ this version). A Codex worker checks at milestones and before its result. An idle worker (turn ended, no wait armed) is not woken: Claude parents use `SendMessage` as the doorbell; a Codex parent waits for the result or resumes per the launcher.
+
 **Answering a question.** `agentbus reply <question-id> --key answer-<question-id> --file answer.md`. Acking a question does not answer it. Claude workers wake through their own background wait; for a Codex worker whose run ended, resume the same thread through the launcher (`spawn.sh --resume <threadId>`), never while its run is active or after Desktop may own it.
 
-**Status.** `agentbus delegations` (add `--probe` for live activity, `--all` for history, `<request-id|name>` for detail). `agentbus close <request>` abandons a delegation without a result (never stops a process).
+**Status.** `agentbus delegations` (add `--probe` for live activity, `--all` for history, `<request-id|name>` for detail, `--global` for every parent's delegations without a caller identity). `agentbus close <request>` abandons a delegation without a result (never stops a process).
 
 | Phase | Meaning | Parent action |
 | --- | --- | --- |
@@ -67,14 +70,15 @@ Your prompt carries an `<agentbus-contract version="1">` block. Follow it exactl
 1. `read --correlation <request-id> --json`, then `ack <request-id>`.
 2. Optional `reply <request-id> --type progress --summary ...` at real milestones only.
 3. Decision or blocker within the task's authorization → `reply <request-id> --type question --key q1-... --summary ... --file -`; one open question at a time. Recover an already-arrived answer with `read` before waiting. Claude: arm `wait --replace --correlation <request-id> --timeout 30m --json` as a background command and end the turn; on every re-invocation recover, ack, re-arm if still waiting. Codex: bounded in-turn `wait`, or end the turn.
-4. Finish all writes and background edits, then `reply <request-id> --type result --outcome <success|blocked|failed|unknown> --key result-... --summary ... --file -` and end the turn promptly. `blocked` hands the task back.
-5. Never message the parent through provider-native channels. Provider permission prompts still belong to the user.
+4. Run the step-1 `read` once more and handle any follow-up, finish all writes and background edits, then `reply <request-id> --type result --outcome <success|blocked|failed|unknown> --key result-... --summary ... --file -` and end the turn promptly. `blocked` hands the task back.
+5. Follow-ups from the parent can arrive mid-task. Claude: an `Agentbus: your parent sent …` note appears after a tool call or when you try to stop; run the commands it names (`read --from <parent>`, then `ack`). Codex: check with the step-1 `read` at milestones. Handle them within the task.
+6. Never message the parent through provider-native channels. Provider permission prompts still belong to the user.
 
 ## Setup and diagnostics
 
 - Install the worker-facing executable on the internal disk once per change of the checkout: `bun run install:bin` in the agentbus checkout (background Claude sessions may be unable to read external volumes).
 - `agentbus doctor` — read-only readiness (store schema, spool backlog, hook installation and pinned store, provider CLIs, caller).
-- Claude workers are observed through per-worker hooks: start them with `claude --bg --settings <claudeSettings>` from the `delegate` receipt. After a Desktop handoff only explicit replies and `--probe` remain. `agentbus hooks claude install|uninstall|status|print [--dry-run]` manages an optional user-level install that also covers handed-off sessions but runs in every Claude session.
+- Claude workers are observed through per-worker hooks: start them with `claude --bg --settings <claudeSettings>` from the `delegate` receipt. The same hooks ring the follow-up doorbell (`PostToolUse`, `Stop`). After a Desktop handoff only explicit replies and `--probe` remain. `agentbus hooks claude install|uninstall|status|print [--dry-run]` manages an optional user-level install that also covers handed-off sessions but runs in every Claude session.
 - `agentbus config set codexBin=/path claudeBin=/path`, `config get|unset|import|export|path|ls`.
 - `agentbus status [<session>] [--probe]`, `agentbus event drain`.
 

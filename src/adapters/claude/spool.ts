@@ -60,6 +60,9 @@ export function spoolCounts(paths: Resolved): { backlog: number; quarantined: nu
 }
 
 /** Payload-free local diagnostics, bounded to about 1 MiB. */
+/** An error message as one bounded, whitespace-free log token. */
+export const errorToken = (err: unknown): string => (err as Error).message.slice(0, 160).replace(/\s+/g, "_");
+
 export function diag(paths: Resolved, line: string): void {
   try {
     ensurePrivateDir(paths.logsDir);

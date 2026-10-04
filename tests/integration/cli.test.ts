@@ -136,6 +136,7 @@ describe("claude hook installation", () => {
     expect(installed.hooks.Stop[0]).toEqual(existing.hooks.Stop[0]);
     expect(installed.hooks.Stop).toHaveLength(2);
     for (const e of [
+      "PostToolUse",
       "SessionStart",
       "UserPromptSubmit",
       "PermissionRequest",
@@ -153,7 +154,7 @@ describe("claude hook installation", () => {
     expect(s.ok(["hooks", "claude", "status"]).current).toBe(true);
 
     const removed = s.ok(["hooks", "claude", "uninstall"]);
-    expect(removed.removed).toBe(6);
+    expect(removed.removed).toBe(7);
     expect(JSON.parse(readFileSync(s.settingsPath, "utf8"))).toEqual(existing);
     expect(s.run(["hooks", "claude", "status"]).code).toBe(1);
   });
@@ -165,7 +166,7 @@ describe("claude hook installation", () => {
     expect(doctor.message).toContain("per-worker");
     const file = join(s.dir, "worker-settings.json");
     s.ok(["hooks", "claude", "print", "--settings-file", file]);
-    expect(Object.keys(JSON.parse(readFileSync(file, "utf8")).hooks)).toHaveLength(6);
+    expect(Object.keys(JSON.parse(readFileSync(file, "utf8")).hooks)).toHaveLength(7);
     expect(existsSync(s.settingsPath)).toBe(false);
   });
 

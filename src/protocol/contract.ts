@@ -20,8 +20,13 @@ export interface ContractInput {
   configPath: string;
 }
 
+/** The exact command prefix a worker runs: pinned CLI, store paths and identity. */
+export function workerCommand(c: Pick<ContractInput, "cliCommand" | "stateDir" | "configPath" | "workerId">) {
+  return `${c.cliCommand} --state-dir ${shellQuote(c.stateDir)} --config ${shellQuote(c.configPath)} --as ${c.workerId}`;
+}
+
 export function renderContract(c: ContractInput): string {
-  const ab = `${c.cliCommand} --state-dir ${shellQuote(c.stateDir)} --config ${shellQuote(c.configPath)} --as ${c.workerId}`;
+  const ab = workerCommand(c);
   const short = c.requestId.slice(0, 8);
   const waitStep =
     c.provider === "claude"
@@ -38,6 +43,10 @@ export function renderContract(c: ContractInput): string {
           `     ${ab} wait --correlation ${c.requestId} --timeout 10m --json`,
           `   or end your turn with the question outstanding; the parent resumes this thread with the answer.`,
         ];
+  const followUpStep =
+    c.provider === "claude"
+      ? ["   Agentbus shows new ones to you after a tool call or when you try to end your turn."]
+      : ["   Check for them with the read command from step 1 at each milestone."];
   return [
     OPEN_TAG,
     `agentbus-request: ${c.requestId}`,
@@ -70,7 +79,11 @@ export function renderContract(c: ContractInput): string {
     "     <result>",
     "     EOF",
     "   A `blocked` result hands the task back; use a question instead if the parent can unblock you here.",
-    "5. Never message the parent through provider-native channels; the mailbox is the record.",
+    "   Right before publishing it, run the read command from step 1 and handle any follow-up first.",
+    "5. Your parent may send follow-up messages (new facts, changed scope) while you work.",
+    ...followUpStep,
+    "   Treat a follow-up like an answer: handle it within this task, then ack it.",
+    "6. Never message the parent through provider-native channels; the mailbox is the record.",
     CLOSE_TAG,
   ].join("\n");
 }

@@ -6,6 +6,7 @@ import {
   type MessageType,
   type NoticeMeta,
   type Outcome,
+  type SettledReason,
 } from "../protocol/types.ts";
 import { newId, nowIso } from "../util/misc.ts";
 import type { Db } from "./db.ts";
@@ -29,6 +30,7 @@ export interface MessageRow {
   turn_ref: string | null;
   seen_at?: string | null;
   acknowledged_at?: string | null;
+  settled_reason?: SettledReason | null;
 }
 
 export function toEnvelope(row: MessageRow): Envelope {
@@ -56,10 +58,11 @@ export function toEnvelope(row: MessageRow): Envelope {
     turnRef: row.turn_ref,
     seenAt: row.seen_at ?? null,
     acknowledgedAt: row.acknowledged_at ?? null,
+    settledReason: row.settled_reason ?? null,
   };
 }
 
-const SELECT_WITH_RECEIPT = `SELECT m.*, r.seen_at, r.acknowledged_at FROM messages m JOIN receipts r ON r.message_id = m.id`;
+const SELECT_WITH_RECEIPT = `SELECT m.*, r.seen_at, r.acknowledged_at, r.settled_reason FROM messages m JOIN receipts r ON r.message_id = m.id`;
 
 export function getMessage(db: Db, id: string): MessageRow | null {
   return db.query<MessageRow, [string]>(`${SELECT_WITH_RECEIPT} WHERE m.id = ?`).get(id);

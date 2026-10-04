@@ -11,6 +11,7 @@ import { conflict, failure } from "../../errors.ts";
 import { fileExists, modeOf, writeFileAtomic } from "../../util/fsx.ts";
 
 export const HOOK_EVENTS = [
+  "PostToolUse",
   "SessionStart",
   "UserPromptSubmit",
   "PermissionRequest",
@@ -22,7 +23,10 @@ export const HOOK_MARKER = "# agentbus-hook v1";
 
 type Json = Record<string, unknown>;
 
-/** Guarded shell command: a missing executable or unmounted checkout is a silent no-op; always exits 0. */
+/**
+ * Guarded shell command: a missing executable or unmounted checkout is a silent no-op; always exits 0.
+ * stdout stays connected for the doorbell's hook decision; the CLI prints nothing else there.
+ */
 export function hookCommand(paths: Resolved): string {
   const argv = paths.cliArgv;
   const guard = argv
@@ -32,7 +36,7 @@ export function hookCommand(paths: Resolved): string {
     : "";
   return (
     `${guard}${paths.cliCommand} --state-dir ${shellQuote(paths.stateDir)} --config ${shellQuote(paths.configPath)} ` +
-    `event ingest --provider claude --source hook >/dev/null 2>&1; exit 0 ${HOOK_MARKER}`
+    `event ingest --provider claude --source hook 2>/dev/null; exit 0 ${HOOK_MARKER}`
   );
 }
 

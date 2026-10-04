@@ -1,5 +1,6 @@
-// Silent Claude hook entry point: never prints, always exits 0, and writes nothing for unregistered
-// sessions. Registered events commit directly or are spooled; an unknown-eligibility outage fails open.
+// Claude hook entry point: always exits 0 and writes nothing for unregistered sessions. Registered events
+// commit directly or are spooled; an unknown-eligibility outage fails open. The only output is the
+// doorbell's hook decision, printed when a worker has parent follow-ups to read (see doorbell.ts).
 
 import { Database } from "bun:sqlite";
 import { randomUUID } from "node:crypto";
@@ -9,6 +10,7 @@ import { BODY_LIMIT } from "../../protocol/types.ts";
 import { HOOK_BUSY_MS, openStore } from "../../store/db.ts";
 import { fileExists, readBoundedStdin } from "../../util/fsx.ts";
 import { nowIso, truncateUtf8 } from "../../util/misc.ts";
+import { ringDoorbell } from "./doorbell.ts";
 import {
   type CapturedClaudeEvent,
   CLAUDE_SOURCE_SCHEMA,
@@ -17,10 +19,11 @@ import {
   promptText,
   readWaitOrigin,
 } from "./events.ts";
-import { diag, drainSpool, hasPendingFor, spoolEvent } from "./spool.ts";
+import { diag, drainSpool, errorToken, hasPendingFor, spoolEvent } from "./spool.ts";
 
 const MAX_HOOK_INPUT = 8 * 1024 * 1024;
 const SUBSCRIBED = new Set([
+  "PostToolUse",
   "SessionStart",
   "UserPromptSubmit",
   "PermissionRequest",
@@ -144,10 +147,17 @@ export async function runHook(args: HookArgs): Promise<void> {
     const nativeSid = raw?.session_id;
     if (typeof event !== "string" || typeof nativeSid !== "string" || !SUBSCRIBED.has(event)) return;
     const capturedAt = nowIso();
+    paths = resolvePaths({ stateDir: args.stateDir, config: args.config });
+    if (event === "PostToolUse" || event === "Stop") {
+      const decision = ringDoorbell(paths, nativeSid, event, deadline);
+      if (decision) process.stdout.write(`${JSON.stringify(decision)}\n`);
+      // PostToolUse only rings. A Stop the doorbell blocked is not a turn end: the turn continues, and the
+      // Stop that finally ends it is the one observed.
+      if (event === "PostToolUse" || decision) return;
+    }
     // Only a syntactically valid contract may be captured before eligibility is known.
     const candidate = event === "UserPromptSubmit" && parseContract(promptText(raw)) !== null;
 
-    paths = resolvePaths({ stateDir: args.stateDir, config: args.config });
     const forceSpool = process.env.AGENTBUS_FAULT_INJECT === "hook-spool";
     const storePresent = fileExists(paths.dbPath);
     // An earlier event of this session still in the spool makes it eligible and fixes ordering: this
@@ -180,22 +190,15 @@ export async function runHook(args: HookArgs): Promise<void> {
           db.close();
         }
       } catch (err) {
-        diag(
-          paths,
-          `hook commit_failed event=${event} error=${(err as Error).message.slice(0, 160).replace(/\s+/g, "_")}`,
-        );
+        diag(paths, `hook commit_failed event=${event} error=${errorToken(err)}`);
       }
     }
     try {
       spoolEvent(paths, ev);
     } catch (err) {
-      diag(
-        paths,
-        `hook capture_lost event=${event} error=${(err as Error).message.slice(0, 160).replace(/\s+/g, "_")}`,
-      );
+      diag(paths, `hook capture_lost event=${event} error=${errorToken(err)}`);
     }
   } catch (err) {
-    if (paths)
-      diag(paths, `hook unexpected error=${(err as Error).message.slice(0, 160).replace(/\s+/g, "_")}`);
+    if (paths) diag(paths, `hook unexpected error=${errorToken(err)}`);
   }
 }

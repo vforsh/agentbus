@@ -4,7 +4,7 @@ import { AgentbusError, EXIT, usageError } from "../../errors.ts";
 import { CONTRACT_VERSION, renderContract } from "../../protocol/contract.ts";
 import { BODY_LIMIT, type Provider } from "../../protocol/types.ts";
 import { requireCaller } from "../../services/caller.ts";
-import { delegate, proposeReturnPath, selectDelegation } from "../../services/mailbox.ts";
+import { delegate, findDelegation, proposeReturnPath, selectDelegation } from "../../services/mailbox.ts";
 import { derivePhase } from "../../services/phase.ts";
 import { probeDelegations } from "../../services/probe.ts";
 import { delegationsForParent } from "../../store/delegations.ts";
@@ -150,17 +150,20 @@ export function registerDelegate(program: Command): void {
     .command("delegations [targets...]")
     .description("The caller's delegations as a parent: phase, outcome, evidence age and pending question")
     .option("--all", "include delegations closed more than 24 hours ago")
+    .option("--global", "every parent's delegations; needs no caller identity")
     .option("--probe", "add live activity and Claude job detail/needs")
     .action(
-      action((ctx, targets: string[], opts: { all?: boolean; probe?: boolean }) => {
+      action((ctx, targets: string[], opts: { all?: boolean; global?: boolean; probe?: boolean }) => {
         const db = ctx.db();
-        const caller = requireCaller(db, ctx.opts.as);
+        // --global skips caller resolution entirely, so an unregistered session can see the board.
+        const caller = opts.global ? null : requireCaller(db, ctx.opts.as).session;
+        const parentId = caller?.id ?? null;
         const spool = drainBeforeRead(ctx, db);
         const rows =
           targets.length > 0
-            ? targets.map((t) => selectDelegation(db, caller.session, t))
+            ? targets.map((t) => (caller ? selectDelegation(db, caller, t) : findDelegation(db, t, null)))
             : delegationsForParent(db, {
-                parentId: caller.session.id,
+                parentId,
                 includeAll: !!opts.all,
                 recentSinceIso: new Date(Date.now() - 24 * 3_600_000).toISOString(),
               });
@@ -175,7 +178,10 @@ export function registerDelegate(program: Command): void {
         const detail = targets.length > 0;
         ctx.emit(
           { delegations: views, ...(spool ? { spool } : {}) },
-          () => (detail ? views.map(delegationDetail).join("\n\n") : delegationsTable(views)),
+          () =>
+            detail
+              ? views.map(delegationDetail).join("\n\n")
+              : delegationsTable(views, { parents: parentId === null }),
           () => delegationsPlain(views),
         );
       }),

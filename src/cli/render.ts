@@ -28,6 +28,7 @@ function kindLabel(e: Envelope): string {
 }
 
 function receiptLabel(e: Envelope): string {
+  if (e.settledReason) return pc.dim("settled");
   if (e.acknowledgedAt) return pc.dim("acked");
   if (e.seenAt) return pc.dim("seen");
   return pc.green("new");
@@ -75,6 +76,7 @@ export function sessionLine(s: Session): string {
 
 export interface DelegationView {
   requestId: string;
+  parent: { id: string; name: string };
   name: string;
   workerId: string;
   provider: string;
@@ -103,6 +105,7 @@ export function delegationView(db: Db, d: DelegationRow, p: PhaseInfo): Delegati
   const w = getSession(db, d.worker_id);
   return {
     requestId: d.request_id,
+    parent: { id: d.parent_id, name: nameOf(db, d.parent_id) },
     name: w ? displayName(w) : d.worker_id.slice(0, 8),
     workerId: d.worker_id,
     provider: w?.provider ?? "unknown",
@@ -152,9 +155,11 @@ const phaseColor = (phase: string): string => {
   }
 };
 
-export function delegationsTable(views: DelegationView[]): string {
+/** `parents` adds a PARENT column, for listings that span several parents. */
+export function delegationsTable(views: DelegationView[], opts: { parents?: boolean } = {}): string {
   if (views.length === 0) return pc.dim("No delegations.");
   const rows = views.map((v) => [
+    ...(opts.parents ? [v.parent.name] : []),
     v.name,
     v.provider,
     Object.entries(v.labels)
@@ -164,14 +169,23 @@ export function delegationsTable(views: DelegationView[]): string {
     v.evidenceAge,
     v.pendingQuestion?.summary ?? v.latestSummary ?? "-",
   ]);
-  const header = ["NAME", "PROVIDER", "LABELS", "PHASE", "AGE", "SUMMARY"];
+  const header = [
+    ...(opts.parents ? ["PARENT"] : []),
+    "NAME",
+    "PROVIDER",
+    "LABELS",
+    "PHASE",
+    "AGE",
+    "SUMMARY",
+  ];
+  const phaseColumn = header.indexOf("PHASE");
   const widths = header.map((h, i) => Math.min(40, Math.max(h.length, ...rows.map((r) => r[i]!.length))));
   const fmt = (cells: string[], color = false) =>
     cells
       .map((c, i) => {
         const cut = i < cells.length - 1 && c.length > widths[i]! ? `${c.slice(0, widths[i]! - 1)}…` : c;
         const padded = i < cells.length - 1 ? cut.padEnd(widths[i]!) : cut;
-        return color && i === 3 ? padded.replace(cut, phaseColor(cut)) : padded;
+        return color && i === phaseColumn ? padded.replace(cut, phaseColor(cut)) : padded;
       })
       .join("  ");
   return [pc.bold(fmt(header)), ...rows.map((r) => fmt(r, true))].join("\n");
@@ -180,6 +194,7 @@ export function delegationsTable(views: DelegationView[]): string {
 export function delegationDetail(v: DelegationView): string {
   const lines = [
     `${pc.bold(v.name)} ${v.requestId}`,
+    `parent    ${v.parent.name}  ${v.parent.id}`,
     `phase     ${v.phase}${v.outcome ? `/${v.outcome}` : ""} — ${v.phaseReason} (${v.evidenceAge} ago)`,
     [
       `provider  ${v.provider}  worker ${v.workerId}`,

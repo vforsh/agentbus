@@ -121,13 +121,16 @@ export function sendMessage(db: Db, caller: SessionRow, input: SendInput): SendR
         );
       }
     }
+    // A parent's message to a worker of its open delegation is a follow-up: it joins that correlation, so
+    // the worker's correlated read and wait and the Claude doorbell hook all surface it mid-task.
+    const task = input.type === "message" ? openDelegationForWorker(db, input.recipient.id) : null;
     const message = insertMessage(db, {
       fromId: caller.id,
       toId: input.recipient.id,
       type: input.type,
       summary: input.summary,
       body: input.body,
-      correlationId: null,
+      correlationId: task?.parent_id === caller.id ? task.request_id : null,
       inReplyTo: null,
       idempotencyKey: input.key,
       intentHash: hash,
@@ -318,19 +321,30 @@ export function ackMessages(db: Db, caller: SessionRow, ids: string[]) {
 /** Selects one of the caller's delegations by request ID or an unambiguous worker name. */
 export function selectDelegation(db: Db, caller: SessionRow, target: string): DelegationRow {
   const byId = getDelegation(db, target);
-  if (byId) {
-    if (byId.parent_id !== caller.id) {
-      throw conflict("not_parent", "Only the delegation's parent can select it", { requestId: target });
-    }
-    return byId;
+  if (byId && byId.parent_id !== caller.id) {
+    throw conflict("not_parent", "Only the delegation's parent can select it", { requestId: target });
   }
-  const mine = delegationsForParent(db, { parentId: caller.id, includeAll: true, recentSinceIso: "" });
-  const named = mine.filter((d) => getSession(db, d.worker_id)?.name === target);
+  return findDelegation(db, target, caller.id);
+}
+
+/**
+ * Resolves a request ID or worker name among one parent's delegations (`parentId`), or among all of them
+ * (null); a name matching several delegations resolves only to its single open one.
+ */
+export function findDelegation(db: Db, target: string, parentId: string | null): DelegationRow {
+  const byId = getDelegation(db, target);
+  if (byId && (parentId === null || byId.parent_id === parentId)) return byId;
+  const scope = delegationsForParent(db, { parentId, includeAll: true, recentSinceIso: "" });
+  const named = scope.filter((d) => getSession(db, d.worker_id)?.name === target);
   if (named.length === 1) return named[0]!;
   const open = named.filter((d) => d.state === "open");
   if (open.length === 1) return open[0]!;
   if (named.length === 0)
-    throw notFound("delegation_not_found", `No delegation ${target} for this caller`, { target });
+    throw notFound(
+      "delegation_not_found",
+      `No delegation ${target}${parentId === null ? "" : " for this caller"}`,
+      { target },
+    );
   throw new AgentbusError(
     "ambiguous_delegation",
     `Name "${target}" matches ${named.length} delegations; use a request ID`,

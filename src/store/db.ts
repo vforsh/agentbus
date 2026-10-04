@@ -7,11 +7,13 @@ import { nowIso } from "../util/misc.ts";
 import m001 from "./migrations/001_mailbox.sql" with { type: "text" };
 import m002 from "./migrations/002_observations.sql" with { type: "text" };
 import m003 from "./migrations/003_handoff.sql" with { type: "text" };
+import m004 from "./migrations/004_settlement.sql" with { type: "text" };
 
 export const MIGRATIONS: ReadonlyArray<{ version: number; name: string; sql: string }> = [
   { version: 1, name: "mailbox", sql: m001 },
   { version: 2, name: "observations", sql: m002 },
   { version: 3, name: "handoff", sql: m003 },
+  { version: 4, name: "settlement", sql: m004 },
 ];
 
 export const SCHEMA_VERSION = MIGRATIONS[MIGRATIONS.length - 1]!.version;

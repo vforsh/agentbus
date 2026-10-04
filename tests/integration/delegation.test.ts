@@ -104,6 +104,7 @@ describe("delegate", () => {
     const settings = JSON.parse(readFileSync(d.claudeSettings, "utf8"));
     expect(Object.keys(settings.hooks).sort()).toEqual([
       "PermissionRequest",
+      "PostToolUse",
       "SessionEnd",
       "SessionStart",
       "Stop",

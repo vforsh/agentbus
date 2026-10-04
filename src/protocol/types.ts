@@ -83,4 +83,9 @@ export interface Envelope {
   turnRef: string | null;
   seenAt: string | null;
   acknowledgedAt: string | null;
+  /** Set when the delegation's end acknowledged the receipt for its recipient; null for recipient acks. */
+  settledReason: SettledReason | null;
 }
+
+/** Why Agentbus acknowledged a receipt on its recipient's behalf (see closeDelegation). */
+export type SettledReason = "delegation_done" | "delegation_closed";
