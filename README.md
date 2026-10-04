@@ -11,7 +11,7 @@ Design and rationale: [PLAN.md](PLAN.md). Agent-facing usage: [skill/agentbus/SK
 | 1. Scaffold, contracts, config, diagnostics | Implemented |
 | 2. Durable mailbox (sessions, messages, receipts, delegations, waits) | Implemented; acceptance 1–4 covered by process-level checks |
 | 3. Worker result capture (Claude hooks + spool, Codex runner events, probes, phases) | Implemented at the adapter level with recorded fixtures; live Claude checks below still open |
-| 4. Launcher integration and live Codex↔Claude workflows | Launchers tracked by default; Claude→Codex live gate passed; Codex→Claude heartbeat gate open (needs the Codex app) |
+| 4. Launcher integration and live Codex↔Claude workflows | Launchers tracked by default; Claude→Codex and Codex→Claude live gates passed |
 | 5. `claude-threads` on Agentbus | Implemented; live gate passed (acceptance 13–14) |
 | 6. Codex wake adapter | Not started (conditional on a spike) |
 
@@ -37,6 +37,8 @@ agentbus init
 agentbus doctor
 ```
 
+After pulling changes, rebuild with `bun run install:bin` and run `agentbus init` to apply schema migrations; commands refuse an older schema until then.
+
 `install:bin` compiles a standalone executable to `${XDG_DATA_HOME:-~/.local/share}/agentbus/bin/agentbus` (~60 MB, includes the Bun runtime). Worker contracts and hooks run that copy whenever it exists. Background Claude sessions can be denied reads on external volumes by macOS privacy controls (observed: `stat` succeeds, `read` fails with `Operation not permitted`), so the CLI that workers execute must live on the internal disk. Rebuild after changing the checkout; `agentbus doctor` warns when the installed copy is stale or when workers would run from an external volume.
 
 State lives in `${XDG_STATE_HOME:-~/.local/state}/agentbus/` (internal disk, `0700`/`0600`); config in `${XDG_CONFIG_HOME:-~/.config}/agentbus/config.json`. Override with `--state-dir`/`--config` or `AGENTBUS_STATE_DIR`/`AGENTBUS_CONFIG`.
@@ -49,7 +51,9 @@ Hooks run only in Agentbus's own Claude workers; `~/.claude/settings.json` is no
 claude --bg --settings "$claudeSettings" ...
 ```
 
-The file subscribes `SessionStart`, `UserPromptSubmit`, `PermissionRequest`, `Stop`, `StopFailure` and `SessionEnd`, and pre-allows exactly the Agentbus CLI command (`permissions.allow`), so contract commands never stop on a permission prompt while other tools keep the session's permission mode. Each entry pins the absolute Bun runtime, CLI path, store and config, guarded so an unmounted checkout volume is a silent no-op. Hooks print nothing and always exit 0. `agentbus hooks claude print [--settings-file <path>]` shows or writes the same settings.
+The file subscribes `SessionStart`, `UserPromptSubmit`, `PermissionRequest`, `PostToolUse`, `Stop`, `StopFailure` and `SessionEnd`, and pre-allows exactly the Agentbus CLI command (`permissions.allow`), so contract commands never stop on a permission prompt while other tools keep the session's permission mode. Each entry pins the absolute Bun runtime, CLI path, store and config, guarded so an unmounted checkout volume is a silent no-op. Hooks always exit 0 and print nothing except the follow-up doorbell.
+
+**Doorbell.** When the parent of a worker's open delegation has sent it mail the worker has not seen, the next `PostToolUse` announces it as `additionalContext`, and a `Stop` is blocked (`decision: block`) until the worker has been shown it. The announcement carries message IDs, summaries and the exact `read`/`ack` commands; claiming marks the mail seen, so each message rings once. A blocked Stop is not recorded as a turn end. `PostToolUse` costs one read-only lookup per tool call. `agentbus hooks claude print [--settings-file <path>]` shows or writes the same settings.
 
 Observation scope is the background owner, as with the Codex runner: after a Desktop handoff the resumed session does not carry `--settings`, so lifecycle notices stop and the worker's explicit `question`/`result` replies plus `--probe` remain. An optional user-level install (`agentbus hooks claude install|uninstall|status [--dry-run]`) extends capture across the handoff at the cost of running the hook, one ~31 ms read-only lookup, in every Claude session; it preserves unrelated entries and writes a private backup.
 
@@ -93,7 +97,7 @@ agentbus delegations
 agentbus init | whoami | doctor|check | skill | completion <fish|zsh|bash>
 agentbus session register|bind|list|show|update
 agentbus delegate --to <claude|codex> --file <path|-> [--name] [--cwd] [--allow-missing-cwd] [--key] [--summary] [--label k=v]... [--contract-out] [--dry-run]
-agentbus delegations [<request-id|name>...] [--all] [--probe]
+agentbus delegations [<request-id|name>...] [--all] [--global] [--probe]
 agentbus send <recipient> --file <path|-> [--type message|request] [--key] [--summary] [--dry-run]
 agentbus reply <message-id> --file <path|-> [--type message|progress|question|result] [--outcome] [--key] [--summary]
 agentbus read [--all] [--unseen] [--after <seq>] [--from] [--type] [--correlation] [--limit]
@@ -128,7 +132,9 @@ Global: `--as`, `--config`, `--state-dir`, `--json`, `--plain`, `-q`, `-v`, `--n
 
 - **Envelope v1**: `id`, `sequence`, `from`, `to`, `type` (`message|request|progress|question|result|notice`), `summary`, `body`, `createdAt`, `correlationId` (root request), `inReplyTo`, `idempotencyKey`, `outcome` (results only), `notice` (`{kind, observationId, provider, truncated?, originalBytes?}`), `turnRef`, `seenAt`, `acknowledgedAt`.
 - **Roles**: `progress`/`question`/`result` go from a delegation's worker to its parent via `reply`; a parent answers with a `message` reply to the question ID. Notices come only from `system:observer` and cannot be replied to. One open delegation per worker, one unresolved question per delegation; every result is terminal.
-- **Delivery**: unseen → seen (by `wait`) → acknowledged (by `ack`). Concurrent waits partition, they do not broadcast; run one watcher per session. `wait --replace` enforces that: it retires the caller's other running waits, which exit 0 with `reason: superseded` without claiming mail.
+- **Follow-ups**: a parent's `send` to the worker of its open delegation joins that delegation's correlation; Claude workers get it through the doorbell mid-turn.
+- **Settlement**: a delegation's terminal transition acknowledges mail nobody needs to handle any more, with `settledReason`: a result settles the worker's side (`delegation_done`), a parent's `close` the whole correlation (`delegation_closed`). The result itself stays with the parent.
+- **Delivery**: unseen → seen (by `wait` or the doorbell) → acknowledged (by `ack`, or by settlement). Concurrent waits partition, they do not broadcast; run one watcher per session. `wait --replace` enforces that: it retires the caller's other running waits, which exit 0 with `reason: superseded` without claiming mail.
 - **Worker contract v1**: delimited `<agentbus-contract version="1">` block naming request, worker, parent and provider, with exact commands including `--state-dir`, `--config` and `--as`. The first Claude `UserPromptSubmit` carrying exactly one unquoted block, from the expected directory, claims the pending worker.
 - **Observation**: Claude hooks and Codex runner events become turn bindings and observations. `turn_finished` notices are suppressed when that exact turn produced a question or result. Task notifications continue a delegated Claude turn only with proven provenance: a verified wait arm recorded by `agentbus wait` inside that turn, or a background task first seen in that turn's Stop inventory against a known baseline. Anything else supersedes the binding (phase `unknown`, `tracking_lost` notice).
 - **Ordering**: hook events of one session commit in capture order. While any event of that session sits in the spool, later events drain it first or queue behind it; a delayed prompt or Stop never rebinds or overwrites a newer turn. Permission and failure events are posted only when attributable to a bound turn.
@@ -157,7 +163,7 @@ Kinds: `run_started` (before exec; `resumeThreadId` for resumes), `child_started
 | Interruption | `SessionEnd` during an open turn; `--probe` PID+start death | Signal; `--probe` runner+child death | — | — |
 | Launch failure | `--probe`: bound session listed as `failed`/`done`/`stopped` before any claimed turn → `launch_failed` (phase `interrupted`, job `detail` in the body) | — | — | — |
 | Permission prompts | `PermissionRequest` (tool name + description only) | Not raised (`approval_policy=never`) | — | — |
-| Follow-up delivery | Worker's own background wait | In-turn wait, or parent resumes thread via launcher | — | — |
+| Follow-up delivery | Doorbell hook mid-turn (`PostToolUse`, `Stop`); the worker's own background wait after a question | `read` at milestones and before the result; in-turn wait, or parent resumes thread via launcher | — | — |
 | Wake-up | — | — | Background `agentbus wait` | Heartbeat (app tool; not callable from CLI) |
 
 Not covered by the selected hooks: tool-level progress, `SubagentStop`, `Notification` prompts (for example idle prompts), and permission prompts that do not raise `PermissionRequest`. Turns a user starts in Codex Desktop are never attributed (no runner).
@@ -182,10 +188,12 @@ Claude→Codex live gate (2026-10-01): a real `codex exec` worker asked a questi
 
 Finding from the same run: the Claude daemon respawns a killed background owner (same session, new PID, `SessionStart source=resume`, same `--settings`) — mid-turn it resumes the turn and re-raises a pending permission prompt. The respawned owner does not adopt the old owner's background tasks: the orphaned wait consumed the parent's answer and the child was never re-invoked. Agentbus now posts `tracking_lost` (phase `unknown`, not repaired by a live-owner probe) when a resumed owner starts while the bound turn's background work is outstanding; a lead recovers with a provider-native doorbell (`SendMessage` to the child), verified live.
 
+Codex→Claude live gate (2026-10-04, real tasks through tracked `codex-to-claude`, Codex app heartbeats `FREQ=MINUTELY;INTERVAL=5`): a worker's `result/success` committed at 16:03:46Z; the parent chat's heartbeat turn started at 16:04:49Z (63 s), read and acknowledged it at 16:06:20Z, and the heartbeat deleted itself once the chat's only delegation closed. A second chat's heartbeat stayed active while its delegation was open.
+
+Same day, real use exposed the missing mid-task channel: a Codex parent sent three follow-ups to working Claude workers, none was read, and both workers published their results without them. Follow-ups now join the delegation and ring the doorbell. Doorbell live check (Claude Code 2.1.287, two disposable Haiku workers, isolated store): a follow-up sent during a worker's foreground command was announced by `PostToolUse` 7 s later, read, acked and honored in the result; one sent while a worker wrote a tool-free reply blocked its `Stop` (“Stop hook feedback”), after which it read, acked and published the requested result. Neither worker had a wait armed.
+
 Still open:
 
-- Codex→Claude: the result returns to the original Codex chat through a heartbeat (requires the Codex app's automation tool).
-
 - Claude: session UUID and `prompt_id` across Desktop resume, and whether per-worker `--settings` hooks stop there; background wait re-invocation in a Desktop-owned session.
-- Codex: `codex exec resume` keeps the thread ID; `CODEX_THREAD_ID` in Desktop tool shells; heartbeat create/run/cleanup.
+- Codex: `CODEX_THREAD_ID` in Desktop tool shells (heartbeat prompts pass `--as codex:<thread-id>` explicitly).
 - Launchers: durable launch manifests, cross-run ownership lock and persisted Desktop-open marker in `claude-to-codex`; fresh-idle handoff guard in `codex-to-claude`.

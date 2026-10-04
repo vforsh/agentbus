@@ -1,6 +1,6 @@
 # Agentbus implementation plan
 
-Status: milestones 1–3 implemented on 2026-10-01; milestone 4 launchers integrated, Claude→Codex live gate passed; milestone 5 (`claude-threads` on Agentbus) implemented with its live gate passed; the Codex→Claude heartbeat gate (needs the Codex app) and the Claude Desktop resume checks remain open (see README). Provider experiments below are evidence for individual primitives, not completed end-to-end acceptance.
+Status: milestones 1–3 implemented on 2026-10-01; milestone 4 launchers integrated, Claude→Codex and Codex→Claude live gates passed; milestone 5 (`claude-threads` on Agentbus) implemented with its live gate passed; follow-ups reach working Claude workers through a doorbell hook (2026-10-04); the Claude Desktop resume checks remain open (see README). Provider experiments below are evidence for individual primitives, not completed end-to-end acceptance.
 
 Agentbus is a local CLI for communication between agent sessions. It supports delegation in every direction between Codex and Claude Code:
 
@@ -491,7 +491,9 @@ A background wait dies with its owning process. A Claude parent that is itself a
 
 A follow-up is always first written to the mailbox (`reply` to the worker's question), so the durable record exists before any delivery attempt.
 
-**Claude worker.** The worker recovers already-arrived answers, then arms its background wait. A correlated notification re-invokes it; unrelated background completions cannot inherit the delegation. No provider-native message is needed or sent as an additional doorbell in v1. Whether this works after Desktop handoff, on timeout, and when the answer arrives before the worker arms the wait are milestone 3 checks. Resuming a stopped Claude session can be added only after verifying no live owner remains and preserving the native ID: resuming with another live owner may copy the conversation. A local MCP Channel is a later option. [Claude Channels reference](https://code.claude.com/docs/en/channels-reference).
+**Claude worker.** The worker recovers already-arrived answers, then arms its background wait. A correlated notification re-invokes it; unrelated background completions cannot inherit the delegation.
+
+**Mid-task follow-ups.** A parent's `send` to the worker of its open delegation joins that delegation's correlation. A worker waits only after asking, so a running Claude worker is reached by a doorbell in its per-worker hooks: on `PostToolUse` and `Stop` the hook claims unseen parent mail of the open delegation (marking it seen in one transaction, so it partitions with any `wait`) and announces it, as `additionalContext` after the tool result or as a blocked Stop that continues the turn. The bodies stay in the store; the announcement names the message IDs and the exact `read --from <parent>`/`ack` commands. A blocked Stop is not observed as a turn end. Child results and other senders' mail never ring, so a worker that also leads keeps them for its own wait. An idle worker is not reached this way; a Claude lead uses `SendMessage`. Codex workers check with `read` at milestones and before their result. Whether this works after Desktop handoff, on timeout, and when the answer arrives before the worker arms the wait are milestone 3 checks. Resuming a stopped Claude session can be added only after verifying no live owner remains and preserving the native ID: resuming with another live owner may copy the conversation. A local MCP Channel is a later option. [Claude Channels reference](https://code.claude.com/docs/en/channels-reference).
 
 **Codex worker.** Within a run, the worker may call bounded `wait` before ending its turn. Once the run has ended with a question, the Claude parent delivers the answer by resuming the same thread through the launcher: `spawn.sh --resume <threadId> -f followup.md`. `followup.md` carries the full generated contract, the worker address and the answer's message ID. Preconditions:
 
@@ -856,6 +858,13 @@ The following experiments were recorded by the earlier plan on 2026-09-30 with C
 `claude-threads` documents further facts verified with Claude desktop 2.16120: model-classified `done`/`blocked`/`working` states, `notify_when_idle` arriving late, and edit refusals in shared checkouts. They informed the phase model and the decision to keep the isolation rule in the skill.
 
 ## Revision log
+
+2026-10-04, follow-ups and settlement:
+
+- Codex→Claude live gate passed with real tasks (heartbeat wake 63 s after the result, acknowledgement, self-deletion after the last delegation closed). The same runs showed parent follow-ups never reaching working workers.
+- A parent's `send` to the worker of its open delegation joins that correlation. The per-worker Claude hooks add `PostToolUse` and ring a doorbell on it and on `Stop` (see "Mid-task follow-ups"); the hook command keeps stdout for that decision. The contract tells workers to expect follow-ups and to re-read before their result. Verified live with two Haiku workers.
+- Migration 004 adds `receipts.settled_reason`. A delegation's terminal transition settles its leftover mail (result: the worker's side; parent close: both sides), and the migration backfills finished delegations, including follow-ups sent before they joined the correlation.
+- `delegations --global` lists every parent's delegations without a caller identity, with the parent named.
 
 2026-10-01, milestone 5 (`claude-threads` on Agentbus):
 
