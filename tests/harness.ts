@@ -164,6 +164,8 @@ export class Store {
   sql<T = any>(query: string, ...params: (string | number)[]): T[] {
     const db = new Database(join(this.stateDir, "agentbus.sqlite3"), { readonly: true });
     try {
+      // Wait-arm polling can race a real CLI commit. Match the CLI's bounded contention deadline.
+      db.exec("PRAGMA busy_timeout = 5000");
       return db.query(query).all(...params) as T[];
     } finally {
       db.close();
@@ -174,6 +176,7 @@ export class Store {
   sqlWrite(query: string, ...params: (string | number)[]): void {
     const db = new Database(join(this.stateDir, "agentbus.sqlite3"));
     try {
+      db.exec("PRAGMA busy_timeout = 5000");
       db.query(query).run(...params);
     } finally {
       db.close();

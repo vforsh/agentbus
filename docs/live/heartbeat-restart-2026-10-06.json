@@ -1,0 +1,171 @@
+{
+  "schemaVersion": 1,
+  "date": "2026-10-06",
+  "liveRestartAcceptance": "not_run",
+  "reason": "An unrelated local chat was active; Desktop was not restarted. Manual original-chat tick is preflight only.",
+  "experimentId": "f0000017-0000-4000-8000-000000000017",
+  "threadId": "f0000011-0000-4000-8000-000000000011",
+  "automationId": "agentbus-restart-experiment-f0000017",
+  "environment": {
+    "capturedAt": "2026-10-06T15:05:25.300Z",
+    "os": "15.7.3 arm64",
+    "bun": "1.4.2",
+    "pathCli": "codex-cli 0.160.1",
+    "bundledCli": "codex-cli 0.160.1",
+    "appVersion": "26.930.61225",
+    "appBuild": "13232",
+    "appPath": "/Applications/ChatGPT.app",
+    "app": {
+      "pid": 93084,
+      "start": "Tue Oct  6 05:31:52 2026"
+    },
+    "owner": {
+      "pid": 93393,
+      "start": "Tue Oct  6 05:31:57 2026"
+    }
+  },
+  "preparedBuild": {
+    "version": "0.1.0",
+    "schemaVersion": 6,
+    "compiled": false,
+    "commit": "3aca6ae4135f78b111f590271857fd98923fcfe3",
+    "dirty": true,
+    "sourceHash": "267c5a5da3c6b71660e3e37ab45e6ab4a56ab70aa5c2ee4298f4a04c87d469c2",
+    "sourceRoot": "/workspace/agentbus",
+    "builtAt": null,
+    "bunVersion": "1.4.2"
+  },
+  "times": {
+    "preparedAt": "2026-10-06T15:05:25.464Z",
+    "automationCreatedAt": "2026-10-06T15:06:13.051000+00:00",
+    "manualCheckInAt": "2026-10-06T15:06:22.580Z",
+    "cleanupAt": "2026-10-06T15:07:09.855Z"
+  },
+  "preparedResults": {
+    "seen": "f0000029-0000-4000-8000-000000000029",
+    "pending": "f0000016-0000-4000-8000-000000000016"
+  },
+  "requests": {
+    "seen": "f0000027-0000-4000-8000-000000000027",
+    "pending": "f0000020-0000-4000-8000-000000000020",
+    "guard": "f0000015-0000-4000-8000-000000000015"
+  },
+  "preparedInbox": {
+    "messages": 53,
+    "pages": 2,
+    "seenResult": {
+      "seenAt": "2026-10-06T15:05:26.601Z",
+      "acknowledgedAt": null
+    },
+    "unreadResult": {
+      "seenAt": null,
+      "acknowledgedAt": null
+    }
+  },
+  "supportedReceipts": {
+    "create": {
+      "automationId": "agentbus-restart-experiment-f0000017",
+      "mode": "create",
+      "status": "ACTIVE"
+    },
+    "view": {
+      "content": [
+        {
+          "type": "text",
+          "text": "Rendered automation card in the app."
+        }
+      ],
+      "isError": false
+    },
+    "delete": {
+      "automationId": "agentbus-restart-experiment-f0000017",
+      "mode": "delete",
+      "deleteStatus": "deleted"
+    }
+  },
+  "manualCheckIn": {
+    "nativeThreadId": "f0000011-0000-4000-8000-000000000011",
+    "host": {
+      "capturedAt": "2026-10-06T15:06:22.381Z",
+      "os": "15.7.3 arm64",
+      "bun": "1.4.2",
+      "pathCli": "codex-cli 0.160.1",
+      "bundledCli": "codex-cli 0.160.1",
+      "appVersion": "26.930.61225",
+      "appBuild": "13232",
+      "appPath": "/Applications/ChatGPT.app",
+      "app": {
+        "pid": 93084,
+        "start": "Tue Oct  6 05:31:52 2026"
+      },
+      "owner": {
+        "pid": 93393,
+        "start": "Tue Oct  6 05:31:57 2026"
+      }
+    },
+    "restartObserved": false
+  },
+  "cleanup": {
+    "state": "aborted",
+    "returnBinding": {
+      "strategy": "heartbeat",
+      "status": "setup_required",
+      "handle": null,
+      "reason": "Restart experiment aborted; own automation deleted",
+      "checkedAt": "2026-10-06T15:07:09.848Z"
+    },
+    "handledBeforeAbort": 0,
+    "remainingAutomationConfig": false
+  },
+  "firstPreflight": {
+    "artifactDirectory": "/Users/example/.local/state/agentbus-experiments/heartbeat-restart-2026-10-06-f0000011",
+    "automationId": "agentbus-restart-experiment-f0000012",
+    "state": "aborted",
+    "finding": "View API renders a card without a metadata payload; no tick or restart performed. Automation deleted through supported tool."
+  },
+  "artifactDirectory": "/Users/example/.local/state/agentbus-experiments/heartbeat-restart-2026-10-06-f0000011-v2",
+  "unverified": [
+    "automation persistence across an actual Desktop restart",
+    "automatic scheduled turn in original chat after reopening",
+    "post-restart unread and seen-result recovery",
+    "missed-run catch-up behavior/latency",
+    "post-restart guarded final cleanup"
+  ],
+  "fixtureEvidence": {
+    "suite": "tests/e2e/heartbeat-restart.test.ts",
+    "classification": "process checks with synthetic API/mail; not live restart evidence",
+    "tests": 6,
+    "status": "passed",
+    "readinessRegression": {
+      "tests": 11,
+      "status": "passed",
+      "change": "Bounded five-second SQLite busy timeout for direct test harness reads/writes"
+    }
+  },
+  "fullGate": {
+    "command": "bun run gate",
+    "status": "passed",
+    "log": "/tmp/agentbus-heartbeat-gate-final-2026-10-06.log",
+    "exitCode": 0,
+    "completedAt": "2026-10-06T15:26:42.948180+00:00",
+    "lint": "passed",
+    "typecheck": "passed",
+    "integration": {
+      "passed": 59,
+      "failed": 0,
+      "seconds": 34.49
+    },
+    "e2e": {
+      "passed": 80,
+      "failed": 0,
+      "seconds": 115.59
+    },
+    "compiled": {
+      "passed": 15,
+      "failed": 0,
+      "seconds": 49.95
+    },
+    "totalPassed": 154
+  },
+  "unrelatedChatActive": true
+}

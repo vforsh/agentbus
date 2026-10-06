@@ -225,6 +225,12 @@ bun run gate
 
 Runs Biome lint, `tsc --noEmit` (TypeScript 7), `test:integration` (mailbox, delegation, concurrency, wait, CLI) and `test:e2e` (Claude hook lifecycle from recorded payloads, Codex runner events, probes with real processes and a fake `claude` inventory, the follow-up completion gate including concurrent follow-up/result races, return-path readiness with real wait processes, and `explain` across delegation situations). All checks drive the public CLI in subprocesses against temporary stores; none touch `~/.claude` or the real mailbox. Fault injection for recovery checks: `AGENTBUS_FAULT_INJECT=wait-after-seen-commit|hook-spool`.
 
+### Opt-in Codex heartbeat restart gate
+
+The [restart workflow](docs/heartbeat-restart.md) prepares private state, a complete static continuation prompt, unread and seen-but-unacknowledged results, and a guard delegation before any restart. `scripts/heartbeat-restart.ts` drives the public CLI, verifies the original native chat and saved automation intent, detects changed Desktop PID/start identity with the old owner confirmed dead, paginates fresh recovery sweeps, records keyed handling before ack, and gates final cleanup. It never restarts the app, launches a model, edits app-owned state, or installs the binary. The current app's card-only automation view is retained alongside a read-only config snapshot, explicitly weaker than observed scheduler execution.
+
+Process checks cover interrupted handling/retry, two-page recovery, identity/automation mismatch, card-only API receipts, keyed results and guarded cleanup. They are fixture evidence. The [2026-10-06 live preflight](docs/live/heartbeat-restart-2026-10-06.md) verified create/view/configuration/deletion and native identity, but **did not restart the app** because an unrelated local chat was active. Both disposable automations were deleted and their stores marked aborted; automatic resumption and result recovery after a real restart remain unverified. A saved automation ID or green package gate does not pass that acceptance criterion.
+
 Recorded evidence lives in `tests/fixtures/` (Claude Code 2.1.284, Codex CLI 0.157.1); `*.synthetic.json` files follow the documented hook shapes where no live capture exists yet.
 
 ### Live checks
@@ -244,4 +250,4 @@ Same day, real use exposed the missing mid-task channel: a Codex parent sent thr
 Still open:
 
 - Claude: session UUID and `prompt_id` across Desktop resume, and whether per-worker `--settings` hooks stop there; background wait re-invocation in a Desktop-owned session.
-- Codex: `CODEX_THREAD_ID` in Desktop tool shells (heartbeat prompts pass `--as codex:<thread-id>` explicitly).
+- Codex: heartbeat persistence, automatic original-chat resumption and result recovery after an app restart. `CODEX_THREAD_ID` was present in this Desktop chat's tool shells on 2026-10-06; other versions/hosts still require identity verification before check-in.
