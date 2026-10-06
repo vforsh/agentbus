@@ -507,7 +507,7 @@ The resumed run must report the same `threadId`; a different ID is a conflict, a
 
 ### Codex wake adapter (milestone 6)
 
-This concerns waking a Codex **parent** chat without a heartbeat. The installed CLI `0.157.1` exposes `codex queue --thread <id> --message <text>` with an optional `--remote <addr>` app-server endpoint (`ws://`, `wss://` or `unix://PATH`). `codex agents` browses sessions on a "shared local app-server daemon", and `codex remote-control start|stop|pair` manages that daemon. The standard daemon endpoint returned `Connection refused` when checked. This establishes an interface candidate, not working delivery into the current Desktop chat. Run a bounded spike against a disposable Codex chat to establish:
+This concerns waking a Codex **parent** chat without a heartbeat. The installed CLI `0.160.1` exposes `codex queue --thread <id> --message <text>` with an optional `--remote <addr>` app-server endpoint (`ws://`, `wss://` or `unix://PATH`). `codex agents` browses sessions on a "shared local app-server daemon", and `codex remote-control start|stop|pair` manages that daemon. The [2026-10-06 capability spike](docs/spikes/codex-wake-2026-10-06.md) failed the first gate: the current chat's Desktop owner uses stdio and has no observed control listener; both PATH and bundled CLI queue probes, the proxy and daemon-version lookup returned `Connection refused` at the default control socket. No model sessions were created after this preflight failure. Keep the heartbeat; no wake worker ships. This is scoped to the observed host configuration, and background-terminal wake remains unverified. When a supported owning-backend endpoint or background wake path is available, run the remaining disposable-chat checks to establish:
 
 1. Which backend owns the chat and whether the CLI can address that same backend.
 2. Behavior when the chat is working, idle and not displayed.
@@ -666,12 +666,12 @@ Milestones 1–5 are implemented; their task lists, exit conditions and live evi
 | 3. Worker result capture | 5–8, 11 | Implemented 2026-10-01 at the adapter level with recorded fixtures; Desktop-resume checks open |
 | 4. End-to-end delegation between providers (first release) | 1–12 | Launchers tracked by default; Claude→Codex (2026-10-01) and Codex→Claude (2026-10-04) live gates passed |
 | 5. `claude-threads` on Agentbus (Claude→Claude) | 13–14 | Implemented; live gate passed 2026-10-01 |
-| 6. Codex wake adapter | 15–16 | Not started; conditional on the spike below |
+| 6. Codex wake adapter | 15–16 | Capability spike failed 2026-10-06 at backend reachability; heartbeat retained, adapter deferred |
 | 7. Optional extensions | — | Not started; outside the release gates |
 
 ### 6. Codex wake adapter (conditional)
 
-- Run the backend capability spike before writing production dispatch.
+- Backend capability spike failed on the observed host (2026-10-06); [evidence and remaining cases](docs/spikes/codex-wake-2026-10-06.md). Rerun only against a supported owning-backend endpoint or a verifiable background wake path before writing production dispatch.
 - If it passes, implement the wake outbox, attempt receipts, leases with fencing, uncertain-dispatch handling, `send --wake`, `wake`, `worker run|list|stop` and exit code 7.
 - Verify active/idle chats, unavailable adapters, duplicate notices, interrupted dispatch and restart recovery.
 
@@ -746,6 +746,6 @@ Failed checks block the corresponding automatic delivery claim; they are not sil
 - Which permission prompt types escape `PermissionRequest`, and can the probe distinguish permission resolution from idle/unknown without relying on model-classified state? `PermissionRequest` itself is verified live with `prompt_id`. (3)
 - Is `CODEX_THREAD_ID` set in Codex Desktop tool shells, as it is under `codex exec`? Heartbeat prompts pass `--as codex:<thread-id>` explicitly meanwhile. (4)
 - Does a Codex heartbeat survive a Codex app restart, and is the capability reliably absent in headless parents? Creation, wake and self-deletion on the original chat passed live. (4)
-- Can `codex queue`, through the shared app-server daemon or `--remote`, reach the backend that owns the Desktop chat, and what receipt does it expose? (6)
+- Can a supported endpoint reach the Desktop chat's owning backend, and what receipt does it expose? The 2026-10-06 spike failed at transport connection; active/idle delivery and dispatch receipts remain unverified. Can background-terminal completion supply a wake path instead? (6)
 
 Resolved by design: explicit contract and continuation provenance bind Claude turns; durable run IDs bind Codex runs; seen state plus unconditional recovery reads support re-arming; rollback journal remains the default. None of these substitutes for the live provider gates.

@@ -13,7 +13,7 @@ Design and rationale: [PLAN.md](PLAN.md). Agent-facing usage: [skill/agentbus/SK
 | 3. Worker result capture (Claude hooks + spool, Codex runner events, probes, phases) | Implemented at the adapter level with recorded fixtures; live Claude checks below still open |
 | 4. Launcher integration and live Codex↔Claude workflows | Launchers tracked by default; Claude→Codex and Codex→Claude live gates passed |
 | 5. `claude-threads` on Agentbus | Implemented; live gate passed (acceptance 13–14) |
-| 6. Codex wake adapter | Not started (conditional on a spike) |
+| 6. Codex wake adapter | [Capability spike](docs/spikes/codex-wake-2026-10-06.md) failed at backend reachability (2026-10-06); heartbeat retained, adapter deferred |
 
 Live gates that passed are listed under [Live checks](#live-checks); everything else is proven by fixture-driven checks for recorded payload shapes, not live delivery.
 

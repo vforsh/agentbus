@@ -1,0 +1,113 @@
+{
+  "schemaVersion": 1,
+  "capturedAt": "2026-10-06T07:16:11.125266+00:00",
+  "platform": "macOS-15.7.3-arm64-arm-64bit-Mach-O",
+  "probes": [
+    {
+      "argv": ["codex", "--version"],
+      "exitCode": 0,
+      "stdout": "codex-cli 0.160.1\n",
+      "stderr": "",
+      "elapsedMs": 56
+    },
+    {
+      "argv": [
+        "/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex",
+        "--version"
+      ],
+      "exitCode": 0,
+      "stdout": "codex-cli 0.160.1\n",
+      "stderr": "",
+      "elapsedMs": 11
+    },
+    {
+      "argv": ["codex", "app-server", "daemon", "version"],
+      "exitCode": 1,
+      "stdout": "",
+      "stderr": "Error: failed to connect to /Users/example/.codex/app-server-control/app-server-control.sock\n\nCaused by:\n    Connection refused (os error 61)\n",
+      "elapsedMs": 22
+    },
+    {
+      "argv": ["codex", "app-server", "proxy"],
+      "exitCode": 1,
+      "stdout": "",
+      "stderr": "Error: failed to connect to socket at /Users/example/.codex/app-server-control/app-server-control.sock\n\nCaused by:\n    Connection refused (os error 61)\n",
+      "elapsedMs": 11
+    },
+    {
+      "argv": [
+        "codex",
+        "queue",
+        "--remote",
+        "unix://",
+        "--thread",
+        "00000000-0000-4000-8000-000000000001",
+        "--message",
+        "Agentbus capability preflight; nonexistent test address."
+      ],
+      "exitCode": 1,
+      "stdout": "",
+      "stderr": "Error: failed to connect to remote app server: failed to connect to remote app server at `unix:///Users/example/.codex/app-server-control/app-server-control.sock`: Connection refused (os error 61)\n",
+      "elapsedMs": 180
+    },
+    {
+      "argv": [
+        "/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex",
+        "queue",
+        "--remote",
+        "unix:///Users/example/.codex/app-server-control/app-server-control.sock",
+        "--thread",
+        "00000000-0000-4000-8000-000000000001",
+        "--message",
+        "Agentbus capability preflight; nonexistent test address."
+      ],
+      "exitCode": 1,
+      "stdout": "",
+      "stderr": "Error: failed to connect to remote app server: failed to connect to remote app server at `unix:///Users/example/.codex/app-server-control/app-server-control.sock`: Connection refused (os error 61)\n",
+      "elapsedMs": 34
+    }
+  ],
+  "ancestors": [
+    {
+      "pid": 83308,
+      "ppid": 93393,
+      "command": "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/Resources/Python.app/Contents/MacOS/Python"
+    },
+    {
+      "pid": 93393,
+      "ppid": 93084,
+      "command": "/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex"
+    },
+    {
+      "pid": 93084,
+      "ppid": 1,
+      "command": "/Applications/ChatGPT.app/Contents/MacOS/ChatGPT"
+    }
+  ],
+  "controlSocket": {
+    "path": "/Users/example/.codex/app-server-control/app-server-control.sock",
+    "exists": true,
+    "isSocket": true
+  },
+  "desktop": {
+    "version": "26.930.61225",
+    "build": "13232",
+    "ownerPid": 93393,
+    "ownerArgv": "/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex -c features.code_mode_host=true app-server --analytics-default-enabled -c plugins.codex-app-tools@openai-bundled.mcp_servers.codex_app.enabled=true -c plugins.code-review@openai-bundled.mcp_servers.code-review.enabled=true",
+    "unixDescriptors": {
+      "exitCode": 0,
+      "stdout": "COMMAND   PID USER   FD   TYPE             DEVICE SIZE/OFF NODE NAME\ncodex   93393 vlad    0u  unix 0x6d71fece28f09dda      0t0      ->0x603e2b043a49bc21\ncodex   93393 vlad    1u  unix 0x1246d47b4638736f      0t0      ->0xc7daab528857e670\ncodex   93393 vlad    2u  unix 0x845e934aefec069a      0t0      ->0x7d5c750d2a36a02b\ncodex   93393 vlad    7u  unix 0xc439ce71fa84a9c9      0t0      ->0xedc4269537748ae7\ncodex   93393 vlad    8u  unix 0xedc4269537748ae7      0t0      ->0xc439ce71fa84a9c9\ncodex   93393 vlad    9u  unix 0xc439ce71fa84a9c9      0t0      ->0xedc4269537748ae7\ncodex   93393 vlad   29u  unix 0x643cd544c878ad07      0t0      ->0xa8b52b22a1657cf8\ncodex   93393 vlad   30u  unix 0xa8b52b22a1657cf8      0t0      ->0x643cd544c878ad07\ncodex   93393 vlad   40u  unix 0xe8886c96f060f32f      0t0      ->0x774db9754f6df0f0\n"
+    },
+    "tcpListeners": {
+      "exitCode": 1,
+      "stdout": ""
+    }
+  },
+  "decision": {
+    "gate": "owning_backend_reachability",
+    "status": "failed",
+    "scope": "Observed local Desktop configuration; not a general Codex compatibility claim.",
+    "productionAdapter": "not_implemented",
+    "remainingLiveCases": "not_run_after_transport_gate_failed"
+  }
+}

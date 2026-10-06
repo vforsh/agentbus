@@ -141,6 +141,12 @@ The following experiments were recorded by the earlier plan on 2026-09-30 with C
 
 ## Revision log
 
+2026-10-06, Codex wake capability spike:
+
+- PATH and Desktop-bundled CLI `0.160.1` both failed explicit Unix-socket queue probes before thread lookup; `app-server daemon version` and `app-server proxy` failed at the same control socket (`Connection refused`, exit 1).
+- Tool-process ancestry identified the current chat's Desktop-owned stdio App Server; it had no observed named Unix or TCP listener. Socket-file existence did not imply readiness.
+- The backend-reachability gate failed on this host. No model sessions, second daemon or production wake worker were created. Heartbeat remains supported; delivery, accepted/uncertain dispatch, reconnect and background-terminal wake cases remain unverified. [Report and raw receipts](spikes/codex-wake-2026-10-06.md).
+
 2026-10-04, follow-ups and settlement:
 
 - Codex→Claude live gate passed with real tasks (heartbeat wake 63 s after the result, acknowledgement, self-deletion after the last delegation closed). The same runs showed parent follow-ups never reaching working workers.
@@ -210,4 +216,3 @@ Earlier entries below describe the design at that time; this review supersedes c
 - Milestones reordered: end-to-end delegation is the first release; the Codex wake adapter, its outbox, leases and worker became a conditional later milestone.
 - Journal mode is fixed to rollback in v1; `init --journal` removed; per-connection pragmas and `data_version` polling specified.
 - `sequence` is a JSON integer; `read --unread` removed as redundant with the default.
-
