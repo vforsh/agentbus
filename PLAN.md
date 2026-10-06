@@ -1,6 +1,6 @@
 # Agentbus implementation plan
 
-Status: milestones 1–3 implemented on 2026-10-01; milestone 4 launchers integrated, Claude→Codex and Codex→Claude live gates passed; milestone 5 (`claude-threads` on Agentbus) implemented with its live gate passed; follow-ups reach working Claude workers through a doorbell hook (2026-10-04); the Claude Desktop resume checks remain open (see README). Provider experiments below are evidence for individual primitives, not completed end-to-end acceptance.
+Status: milestones 1–5 implemented and their live gates passed; follow-ups reach working Claude workers through a doorbell hook (2026-10-04); the Claude Desktop resume checks remain open (see [Remaining implementation questions](#remaining-implementation-questions)). This file is the live design and open work; completed task lists, evidence and the revision log are in [docs/history.md](docs/history.md).
 
 Agentbus is a local CLI for communication between agent sessions. It supports delegation in every direction between Codex and Claude Code:
 
@@ -24,7 +24,7 @@ Deliver in order of certainty: durable messaging, then worker result capture, th
 | Storage | SQLite through `bun:sqlite`, rollback journal; SQL migrations and prepared statements |
 | Platforms | macOS first; keep the mailbox portable to Linux |
 | Deployment | Local checkout and `bun link` after implementation passes its gates |
-| Directions | Release targets: Codex→Claude and Claude→Codex in milestone 4; Claude→Claude in milestone 5. None is yet verified end to end through Agentbus. Codex→Codex is protocol-compatible but outside the release gates |
+| Directions | Codex→Claude and Claude→Codex (milestone 4) and Claude→Claude (milestone 5), each verified by a live gate. Codex→Codex is protocol-compatible but outside the release gates |
 | Launching | The skills `codex-to-claude`, `claude-to-codex` and `claude-threads` remain the launchers. They share one Agentbus sequence: `delegate`, spawn, `session bind` |
 | Process model | Short-lived CLI processes, Claude hooks and the existing `codex exec` runner; no daemon or long-running worker unless a verified wake adapter ships |
 | Trust boundary | One OS user on one host; session identities are routing labels, not authenticated principals |
@@ -123,7 +123,7 @@ Registration is idempotent on `(provider, external_id)` within this host's store
 1. `agentbus delegate --to <claude|codex> --file <request>` creates a pending worker session (internal UUID, no native ID). In the same transaction it sends the request and opens the delegation. It returns the worker ID, the request ID and the worker contract.
 2. The launcher appends the contract to the worker prompt and spawns the worker.
 3. The native ID is bound once known:
-   - Claude: the previous experiment found that `claude --bg --session-id <uuid>` ignores the flag. The first `UserPromptSubmit` with exactly one generated contract block for an open delegation claims its pending Claude worker in one transaction. Validate the provider, worker ID and expected canonical working directory; ambiguous or quoted tokens outside the contract block do not claim. The launcher then confirms with `session bind`, using the UUID from `claude agents --all --json`, and records the short ID in the adapter binding. Finalize the worker directory before launch, including a requested worktree's actual path.
+   - Claude: `claude --bg --session-id <uuid>` ignores the flag (2026-09-30 evidence). The first `UserPromptSubmit` with exactly one generated contract block for an open delegation claims its pending Claude worker in one transaction. Validate the provider, worker ID and expected canonical working directory; ambiguous or quoted tokens outside the contract block do not claim. The launcher then confirms with `session bind`, using the UUID from `claude agents --all --json`, and records the short ID in the adapter binding. Finalize the worker directory before launch, including a requested worktree's actual path.
    - Codex: the runner reads `thread_id` from the `thread.started` event of `codex exec --json` and runs `session bind`, recording its run directory and PID. No hook is involved.
 4. `session bind` succeeds when the binding already matches and fails with a conflict when it differs.
 
@@ -252,12 +252,12 @@ Each worker prompt carries a delimited, versioned contract from `delegate`, incl
 **Claude worker.** `UserPromptSubmit` and `Stop` both carry `prompt_id`, which gives exact turn identity. For a registered Claude session with an open delegation:
 
 - `UserPromptSubmit` carrying the contract binds its `prompt_id` to that delegation and owner generation.
-- A `<task-notification>` is a continuation only when its task ID has a verified creation association with the bound turn, or its structured Agentbus wait receipt identifies that delegation and originating bound turn. Presence in a session-wide Stop task inventory alone does not prove origin. Capture a wait's origin when arming it, independent of the correlation IDs of incoming messages (a worker may also have children). Record the new prompt ID as a separate turn linked to its predecessor; it need not equal the earlier `prompt_id`. The marker alone never binds unrelated notifications. Milestone 3 must verify this association, including completion before Stop is captured.
+- A `<task-notification>` is a continuation only when its task ID has a verified creation association with the bound turn, or its structured Agentbus wait receipt identifies that delegation and originating bound turn. Presence in a session-wide Stop task inventory alone does not prove origin. Capture a wait's origin when arming it, independent of the correlation IDs of incoming messages (a worker may also have children). Record the new prompt ID as a separate turn linked to its predecessor; it need not equal the earlier `prompt_id`. The marker alone never binds unrelated notifications. Wait-receipt provenance passed live; completion before Stop stays attributable because the wait's origin is recorded when it is armed.
 - Any other prompt, such as a manual Desktop follow-up, ends automatic inheritance of the binding. Preserve the old turn records for late events, but do not let an old background notification rebind the newer conversation. If continuation provenance cannot be established, require an explicit contract-bearing follow-up and report the automatic route unsupported.
 - `Stop` for a bound `prompt_id` records `turn_finished`. Unless suppressed (see above), it posts a notice containing `last_assistant_message` to the parent. `Stop` also lists the session's `background_tasks`; the notice states whether any are still running, since Claude will then take another turn.
 - `StopFailure` posts `turn_failed`. `PermissionRequest` posts `permission_request` as a need for user input; the hook never answers it. `SessionEnd` records `owner_released`, or posts `turn_interrupted` when a bound turn is open.
 
-**Codex worker.** Binding is structural: a delegation is bound to the `codex exec` runs that its launcher starts, meaning the initial run and parent-initiated resumes, each carrying the token. Allocate and persist a new `runId` before each exec, including resume; retain any native turn ID as additional metadata. The documented JSON stream's `turn.started` example has no turn ID, so v1 must not depend on one. Create the run binding before launch and ingest `turn_started` when that event is observed, not merely when `thread.started` appears. [Codex non-interactive JSON events](https://learn.chatgpt.com/docs/non-interactive-mode#make-output-machine-readable). On exit, ingest:
+**Codex worker.** Binding is structural: a delegation is bound to the `codex exec` runs that its launcher starts, meaning the initial run and parent-initiated resumes, each carrying the token. Allocate and persist a new `runId` before each exec, including resume; retain any native turn ID as additional metadata. The JSON stream's `turn.started` has no turn ID (documented example and Codex CLI 0.157.1), so v1 must not depend on one. Create the run binding before launch and ingest `turn_started` when that event is observed, not merely when `thread.started` appears. [Codex non-interactive JSON events](https://learn.chatgpt.com/docs/non-interactive-mode#make-output-machine-readable). On exit, ingest:
 
 - `turn_finished` with this run's `last-message.md` only when exit status is zero, a `turn.completed` event was observed, and the fresh final message exists. It is subject to the same suppression rule.
 - `turn_failed` for an explicit provider failure, nonzero exit or missing/incomplete completion evidence; retain the reason. A signal interruption is `turn_interrupted`. Stale output from a previous run is never a result.
@@ -431,14 +431,14 @@ Store provider executable paths in config; add wake strategy names in milestone 
 
 ### Claude hooks
 
-Hooks are per worker by default (decision of 2026-10-01): `delegate --to claude` writes a private settings file under `<state-dir>/workers/<worker-id>/claude-settings.json` and returns it as `claudeSettings`; launchers start the worker with `claude --bg --settings <file>`. No other Claude session runs Agentbus code and `~/.claude/settings.json` is untouched. The earlier experiment confirmed `--settings` hooks fire in `--bg` sessions. The tracking scope matches the Codex runner: lifecycle capture is required while the background owner runs the worker; after a Desktop handoff the resumed session lacks `--settings`, so observation falls back to explicit replies and probes. An optional user-level install (`hooks claude install`) extends capture across the handoff for users who accept a hook in every session.
+Hooks are per worker by default (decision of 2026-10-01): `delegate --to claude` writes a private settings file under `<state-dir>/workers/<worker-id>/claude-settings.json` and returns it as `claudeSettings`; launchers start the worker with `claude --bg --settings <file>`. No other Claude session runs Agentbus code and `~/.claude/settings.json` is untouched. `--settings` hooks fire in `--bg` sessions (verified live). The tracking scope matches the Codex runner: lifecycle capture is required while the background owner runs the worker; after a Desktop handoff the resumed session lacks `--settings`, so observation falls back to explicit replies and probes. An optional user-level install (`hooks claude install`) extends capture across the handoff for users who accept a hook in every session.
 
-Subscribe only to low-frequency events: `SessionStart`, `UserPromptSubmit`, `PermissionRequest`, `Stop`, `StopFailure` and `SessionEnd`. Skip tool-use and `SubagentStop` events: progress belongs in explicit replies, and an optional user-level install would run them in every session.
+Subscribe only to low-frequency events: `SessionStart`, `UserPromptSubmit`, `PermissionRequest`, `Stop`, `StopFailure` and `SessionEnd`, plus `PostToolUse` solely for the follow-up doorbell (one read-only lookup per tool call; see [Follow-ups to workers](#follow-ups-to-workers)). Skip other tool-use and `SubagentStop` events: progress belongs in explicit replies, and an optional user-level install would run them in every session.
 
 Hook command contract:
 
 - Guard the command so a missing binary is a silent no-op. The `bun link` target lives on an external volume and disappears when it is unmounted. The command always exits 0; exit code 2 would block Claude, and on `Stop` would keep the turn running.
-- Print nothing to stdout. Output from `UserPromptSubmit` and `SessionStart` becomes model context, and JSON output can return permission or stop decisions.
+- Print nothing to stdout except the doorbell decision. Output from `UserPromptSubmit` and `SessionStart` becomes model context, and JSON output can return permission or stop decisions.
 - For a confirmed unregistered `session_id`, perform one read-only indexed lookup and exit without writes. The exception is a syntactically valid generated contract in `UserPromptSubmit`, which may claim a pending session after database validation. The syntax check does not prove eligibility. A cold Bun start plus lookup previously measured 10–20 ms; target under 50 ms on this fast path, and separately measure registered, contention and unavailable-store paths.
 - For a registered session, commit the observation and any notice in one transaction within the hook budget.
 - After eligibility is established, if the commit cannot complete, write a bounded capture envelope to `<state-dir>/spool/` using a private temp file, flush and atomic rename. Retain the source-event ID, capture time, source schema version and fields required to reconstruct binding; do not discard an event merely because its preceding bind/start event has not ingested yet. A valid contract-bearing claim candidate may be spooled and revalidated later. An unavailable store before eligibility is known must fail open without capturing unrelated session payloads; this is an explicit observation gap, not guaranteed delivery.
@@ -448,7 +448,7 @@ The hook wrapper exits 0 even when SQLite and spooling both fail (disk full, per
 
 `Stop.last_assistant_message` supplies the fallback final response. `Stop` can coexist with active background tasks, and API failures use `StopFailure`; handlers preserve those distinctions. [Claude hooks reference](https://code.claude.com/docs/en/hooks#stop). Explicit `result` replies take precedence over fallback text. Reading persisted conversation history through the Agent SDK's `get_session_messages()` remains an optional later feature. [Anthropic session browser example](https://platform.claude.com/cookbook/claude-agent-sdk-05-building-a-session-browser).
 
-Hook stdout stays empty throughout v1. Optional context injection belongs to a later, separately verified capability. The silent hook entry point is the exception to the normal CLI JSON/exit-code contract; runner ingestion keeps ordinary receipts and failures.
+Hook stdout stays empty in v1 except for the doorbell's `PostToolUse` `additionalContext` and blocked-`Stop` decision; other context injection belongs to a later, separately verified capability. The silent hook entry point is the exception to the normal CLI JSON/exit-code contract; runner ingestion keeps ordinary receipts and failures.
 
 ### Claude session probing and Desktop handoff
 
@@ -456,11 +456,11 @@ Hook stdout stays empty throughout v1. Optional context injection belongs to a l
 
 The `codex-to-claude` Desktop helper polls every 5 seconds, waits for `state=done` and an idle status, stops the background owner and opens the same session through `claude://resume`. It remains the only handoff controller. Agentbus needs no handoff logic: per-worker hooks stop at the transfer (optional user-level hooks keep firing, filtered by UUID), and probes report the observed owner. `claude-threads` imports children into the Desktop sidebar while the background process keeps owning them; that does not affect Agentbus.
 
-**Observed launcher defect.** In the earlier experiment, a turn that used a background command remained `state: working`, `status: idle` for over five minutes; the control reached `done`. The helper's `state=done` condition can therefore stall. Milestone 4 replaces it with a fresh positive idle probe plus a Stop from the current binding generation whose background-task and scheduled-wakeup lists are known and empty. Missing/stale lists are not empty. Recheck immediately before releasing ownership; a result alone is insufficient, and terminal lifecycle capture must continue after that result. Verify this rule with a running wait, a completed wait, a scheduled wakeup and a manual follow-up arriving during handoff.
+**Handoff readiness.** A turn that used a background command was observed to stay `state: working`, `status: idle` for over five minutes while the control reached `done`, so the helper's original `state=done` condition can stall. The handoff guard instead requires a fresh positive idle probe plus a Stop from the current binding generation whose background-task and scheduled-wakeup lists are known and empty. Missing/stale lists are not empty. Recheck immediately before releasing ownership; a result alone is insufficient, and terminal lifecycle capture must continue after that result. Verify this rule with a running wait, a completed wait, a scheduled wakeup and a manual follow-up arriving during handoff.
 
 ### Codex runner events
 
-`claude-to-codex` already starts a detached runner that owns one `codex exec --json` run, names the thread afterwards and writes `state.json` and `last-message.md`. Milestone 4 extends it without changing its ownership rules:
+`claude-to-codex` starts a detached runner that owns one `codex exec --json` run, names the thread afterwards and writes `state.json` and `last-message.md`. Agentbus tracking extends it without changing its ownership rules:
 
 1. Acquire the request/thread ownership lock and persist the new `runId`, run directory and binding generation before exec. Set `AGENTBUS_SESSION_ID=<worker-id>` and selected Agentbus paths; remove inherited Claude/native parent routing variables. Record runner and child PIDs with process start identities as soon as available.
 2. Parse complete JSONL records incrementally, tolerating a trailing partial record and additive fields. On `thread.started`, bind the native thread ID and verify it matches an intended resume. On `turn.started`, ingest the event against this `runId`. Unexpected IDs and conflicting bindings stop the managed run and report a conflict; they do not become a new successful delegation.
@@ -485,7 +485,7 @@ Without filters it covers every delegation of the parent, including workers dele
 
 A background wait dies with its owning process. A Claude parent that is itself a background worker (for example Codex→Claude→Codex) keeps its session busy while the wait is armed, so its own Desktop handoff waits until the nested delegation finishes. That is intended, per the fixed readiness rule.
 
-**Codex parent: heartbeat.** When the app automation capability is available and monitoring is within the user's request, the parent skill creates or reuses one heartbeat on the original chat, covering all of its delegations. Persist the returned automation ID in the workflow record to avoid duplicates and allow cleanup. Its static prompt always reads all unacknowledged mail first; an optional short `wait` can follow. Report only meaningful changes (question, result, blocking notice), acknowledge handled messages, and stay quiet for unchanged state. Delete the heartbeat only after all watched delegations are closed and outstanding messages/actions handled; repeat cleanup safely after interruptions. Creation failure leaves `returnPathStatus` unready and is reported with the manual polling fallback. The CLI cannot call this app-only tool, and a headless Codex parent must not be promised a heartbeat. Automatic provider wake is milestone 6; verify heartbeat creation, return and cleanup in the live release gate rather than inferring them from a changelog.
+**Codex parent: heartbeat.** When the app automation capability is available and monitoring is within the user's request, the parent skill creates or reuses one heartbeat on the original chat, covering all of its delegations. Persist the returned automation ID in the workflow record to avoid duplicates and allow cleanup. Its static prompt always reads all unacknowledged mail first; an optional short `wait` can follow. Report only meaningful changes (question, result, blocking notice), acknowledge handled messages, and stay quiet for unchanged state. Delete the heartbeat only after all watched delegations are closed and outstanding messages/actions handled; repeat cleanup safely after interruptions. Creation failure leaves `returnPathStatus` unready and is reported with the manual polling fallback. The CLI cannot call this app-only tool, and a headless Codex parent must not be promised a heartbeat. Automatic provider wake is milestone 6. Heartbeat creation, return and cleanup passed the 2026-10-04 live gate; re-verify them live after provider upgrades rather than inferring them from a changelog.
 
 ### Follow-ups to workers
 
@@ -493,7 +493,7 @@ A follow-up is always first written to the mailbox (`reply` to the worker's ques
 
 **Claude worker.** The worker recovers already-arrived answers, then arms its background wait. A correlated notification re-invokes it; unrelated background completions cannot inherit the delegation.
 
-**Mid-task follow-ups.** A parent's `send` to the worker of its open delegation joins that delegation's correlation. A worker waits only after asking, so a running Claude worker is reached by a doorbell in its per-worker hooks: on `PostToolUse` and `Stop` the hook claims unseen parent mail of the open delegation (marking it seen in one transaction, so it partitions with any `wait`) and announces it, as `additionalContext` after the tool result or as a blocked Stop that continues the turn. The bodies stay in the store; the announcement names the message IDs and the exact `read --from <parent>`/`ack` commands. A blocked Stop is not observed as a turn end. Child results and other senders' mail never ring, so a worker that also leads keeps them for its own wait. An idle worker is not reached this way; a Claude lead uses `SendMessage`. Codex workers check with `read` at milestones and before their result. Whether this works after Desktop handoff, on timeout, and when the answer arrives before the worker arms the wait are milestone 3 checks. Resuming a stopped Claude session can be added only after verifying no live owner remains and preserving the native ID: resuming with another live owner may copy the conversation. A local MCP Channel is a later option. [Claude Channels reference](https://code.claude.com/docs/en/channels-reference).
+**Mid-task follow-ups.** A parent's `send` to the worker of its open delegation joins that delegation's correlation. A worker waits only after asking, so a running Claude worker is reached by a doorbell in its per-worker hooks: on `PostToolUse` and `Stop` the hook claims unseen parent mail of the open delegation (marking it seen in one transaction, so it partitions with any `wait`) and announces it, as `additionalContext` after the tool result or as a blocked Stop that continues the turn. The bodies stay in the store; the announcement names the message IDs and the exact `read --from <parent>`/`ack` commands. A blocked Stop is not observed as a turn end. Child results and other senders' mail never ring, so a worker that also leads keeps them for its own wait. An idle worker is not reached this way; a Claude lead uses `SendMessage`. Codex workers check with `read` at milestones and before their result. Behavior after Desktop handoff (per-worker hooks stop there), on timeout, and when the answer arrives before the worker arms the wait remains unverified live. Resuming a stopped Claude session can be added only after verifying no live owner remains and preserving the native ID: resuming with another live owner may copy the conversation. A local MCP Channel is a later option. [Claude Channels reference](https://code.claude.com/docs/en/channels-reference).
 
 **Codex worker.** Within a run, the worker may call bounded `wait` before ending its turn. Once the run has ended with a question, the Claude parent delivers the answer by resuming the same thread through the launcher: `spawn.sh --resume <threadId> -f followup.md`. `followup.md` carries the full generated contract, the worker address and the answer's message ID. Preconditions:
 
@@ -521,18 +521,9 @@ Wake states are `pending`, `dispatching`, `accepted`, `unsupported`, `failed` an
 
 ## `claude-threads` on Agentbus
 
-`claude-threads` (in `agent-skills`) makes a Claude session the lead of background Claude children. Today it implements its own tracking in `threads.py` (673 lines):
+`claude-threads` (in `agent-skills`) makes a Claude session the lead of background Claude children. Its former tracking (`threads.py` registry, `report.md` contract, `claude agents` polling, state heuristics, transcript parsing, ListAgents/`uds:` lead addressing) was replaced in milestone 5; see [docs/history.md](docs/history.md#claude-threads-before-agentbus). The skill keeps only what is genuinely about launching:
 
-- A per-lead registry of `meta.json` files.
-- A `report.md` contract with a parsed `Status:` line.
-- A watcher that polls `claude agents` and `~/.claude/jobs/*/state.json`.
-- Heuristics that second-guess model-classified states.
-- Transcript parsing to detect whether a child already messaged its lead.
-- Lead addressing through the ListAgents name or a `uds:` socket, which break on rename or app restart.
-
-Agentbus covers all of it, so the skill keeps only what is genuinely about launching:
-
-| `claude-threads` today | On Agentbus |
+| Legacy `claude-threads` | On Agentbus |
 | --- | --- |
 | `threads.py prepare/register/discard`, registry directory, `meta.json` | `agentbus delegate` (with `--label model=… effort=… worktree=…`), then `session bind` |
 | Thread contract constant, `report.md`, `--add-dir` for the report directory | Contract from `delegate` plus the skill's isolation rule; `result` with outcome and summary |
@@ -546,9 +537,7 @@ Agentbus covers all of it, so the skill keeps only what is genuinely about launc
 
 `spawn.sh` keeps model, effort, permission mode, worktree, the `bgIsolation` preflight, `-a` shared prompt sections, naming, `claude --bg`, Desktop import and Ghostty attach. Untracked spawning (`--no-track`) stays free of any Agentbus dependency; tracked spawning requires Agentbus and checks `agentbus doctor` first.
 
-Expected result: `threads.py` is deleted, `wait.sh` and `status.sh` become one-line wrappers or disappear in favor of the commands themselves, and the skill's lifecycle table is replaced by the delegation phase table. The remaining scripts shrink from about 980 to about 300 lines. Children already in flight under the old registry are finished or stopped before switching; there is no registry migration.
-
-Treat script-size reduction as an estimate, not an acceptance criterion. Switch each launcher only after its new path passes the live gates; retain a tagged/versioned rollback point and never run both tracking protocols for the same child. Worktree cleanup keeps the launcher's existing authorization requirements; closing an Agentbus delegation alone never deletes a session or worktree.
+`threads.py`, `wait.sh` and `status.sh` are gone; the delegation phase table replaces the skill's lifecycle table. There is no registry migration: children under the old registry are finished or stopped before switching. Never run both tracking protocols for the same child; the rollback point is tag `claude-threads-v1-registry` in agent-skills. Worktree cleanup keeps the launcher's existing authorization requirements; closing an Agentbus delegation alone never deletes a session or worktree.
 
 ## Example agent workflows
 
@@ -648,6 +637,7 @@ scripts/
 skill/agentbus/SKILL.md
 README.md
 PLAN.md
+docs/history.md
 package.json
 tsconfig.json
 bun.lock
@@ -655,87 +645,27 @@ bun.lock
 
 Commands orchestrate domain operations; SQL belongs to store modules, provider subprocesses to adapters, and workflow state to services. Start with concrete functions and types; extract shared adapter interfaces only when both providers need them. Normalized observation events and the probe result are the first shared contracts. Keep code files below roughly 1,000 lines.
 
-Use a Bun entrypoint, package `bin` mapping, strict TypeScript and current compatible dependency releases locked at scaffolding time. Add lint/format tooling then and check its maintenance before introducing it. Recheck Commander, Zod and Picocolors versions when implementation starts. [Commander](https://github.com/tj/commander.js), [Zod](https://github.com/colinhacks/zod), [Picocolors](https://github.com/alexeyraspopov/picocolors).
+Use a Bun entrypoint, package `bin` mapping, strict TypeScript and current compatible dependency releases in the lockfile. Check a tool's or dependency's maintenance before introducing it, and recheck Commander, Zod and Picocolors on upgrades. [Commander](https://github.com/tj/commander.js), [Zod](https://github.com/colinhacks/zod), [Picocolors](https://github.com/alexeyraspopov/picocolors).
 
 ### Bun version policy
 
-Resolve the latest stable Bun from the official release feed when implementation begins; do not use canary or treat the older local binary (`1.3.8`) as the baseline. The stable release on September 30, 2026 is `1.4.2`; re-resolve at scaffolding time. [Official Bun release](https://github.com/oven-sh/bun/releases/tag/bun-v1.4.2).
+Use the latest stable Bun from the official release feed, never canary. The baseline is `1.4.2` (`packageManager: bun@1.4.2`, `engines.bun: >=1.4.2`; README records the revision). [Official Bun release](https://github.com/oven-sh/bun/releases/tag/bun-v1.4.2).
 
-Update Bun through its existing installation method, then record `bun --version` and `bun --revision`. Pin that version in `packageManager` and CI, set the supported floor in `engines.bun`, and document it in README. Verify the SQLite version separately after the runtime change.
+On an upgrade, update Bun through its existing installation method, record `bun --version` and `bun --revision`, update `packageManager`, CI, `engines.bun` and README together, and verify the SQLite version separately (see [Journal mode decision](#journal-mode-decision)).
 
 ## Implementation milestones
 
-### 1. Scaffold and contracts
+Milestones 1–5 are implemented; their task lists, exit conditions and live evidence are in [docs/history.md](docs/history.md#completed-milestones).
 
-- Select the latest stable Bun; record its version, revision and SQLite version.
-- Initialize the Bun project; create the binary, strict compiler config, lint setup and command registration.
-- Define message, session, observation, phase, output and error schemas; document exit codes and proposed defaults.
-- Implement help/version, configuration, read-only diagnostics, `whoami` and completion output.
-- Capture provider evidence as fixtures:
-  - Claude: `claude --help`, `claude agents --all --json` rows (including a `working`/`idle` row left behind by a background command) and `~/.claude/jobs/<id>/state.json` samples.
-  - Claude: payloads for the six subscribed hook events, including a `<task-notification>` prompt, a `Stop` with running `background_tasks`, a `PermissionRequest` and a `SessionEnd` during an open turn.
-  - Codex: `codex exec --json` event streams for success, failure and resume, the runner's `state.json`, and `codex queue --help`.
-- Verify the binary from a temporary working directory with no initialized mailbox; help must still work.
-
-Exit condition: CLI conventions, configuration and validation are usable; diagnostics identify missing state and provider capabilities without changing them.
-
-### 2. Durable mailbox
-
-- Implement migrations, sessions with pending state, labels and the `system:observer` seed, messages with summaries, receipts and delegations.
-- Implement send/reply/read/wait/ack/close/bind and `delegate` with contract generation, retry-key conflicts, seen state, cursors, `wait --settled`, `returnPath` and dry-run behavior.
-- Enforce role/correlation rules, one open delegation per worker and terminal-state races in database transactions. Recover keyed calls before checking current task state; retain original contract versions.
-- Implement `delegations` with phases derivable from messages alone; observation-based phases arrive in milestone 3.
-- Commit before printing receipts; handle busy deadlines and Ctrl-C.
-- Verify separate OS processes, Unicode bodies, long stdin input, concurrent keyed senders/delegators, pagination beyond 50 messages, restart recovery and recipient-scoped acknowledgements. Inject a failure after a wait's seen commit but before stdout; prove startup/heartbeat/timeout recovery finds the message.
-
-Exit condition: the mailbox satisfies acceptance criteria 1–4 with provider adapters disabled.
-
-### 3. Worker result capture
-
-- Run the remaining Claude checks first, with disposable sessions:
-  - The session UUID survives Desktop resume; new prompt IDs remain observable and correctly associated with their own turns.
-  - Per-worker `--settings` hooks fire under the background owner; confirm they stop after Desktop resume (optional user-level hooks: confirm they continue).
-  - A background wait armed in a Desktop-owned session re-invokes it.
-  - `SessionEnd` fires on `claude stop` of a working session.
-  - Task-notification provenance distinguishes delegated waits from unrelated background tasks; timeout and completion-before-Stop cases remain attributable.
-  - Permission request/resolution and background-task/cron metadata support the proposed phases and handoff guard. Document uncovered prompt types rather than claiming complete permission observation.
-- Implement `event ingest` with stable captured occurrence IDs, token claims, bounded spool/drain, durable turn bindings, notices with suppression and interruption, and observation-based phases. Exercise out-of-order replay and spool-only changes while a wait is already polling.
-- Implement `hooks claude print|install|uninstall|status`.
-- Implement batched probes: Claude inventory with optional job diagnostics, Codex runner and child process identities. Expose them through `status --probe`, `delegations --probe` and `wait --probe`; missing evidence yields tracking loss, and stale probes cannot change a newer run.
-- Drive `--source runner` with recorded `codex exec` fixtures through the public CLI; the live runner integration lands in milestone 4.
-
-Exit condition: acceptance criteria 5–8 and 11 at the adapter level, including documented degraded-capture boundaries. Supported Claude events commit through the hook alone when the store is available; deferred capture drains later. Codex runner fixtures exercise equivalent lifecycle distinctions; outcome remains unknown when only final text exists. Live runner coverage is still required in milestone 4.
-
-### 4. End-to-end delegation between providers (first release)
-
-- Write the consumer skill under `skill/agentbus/SKILL.md`: identity, message types, seen state, acknowledgements, outcomes, the parent loop per `returnPath`, the worker role, the question round-trip and recovery.
-- Integrate `codex-to-claude`: `delegate`, durable launch manifest, contract, post-launch `session bind`, and `reply --type result` in place of the ad hoc `result.md` handshake. Apply the fresh-idle/background-task/cron handoff guard, including capture after a result. Its helper remains the only handoff controller.
-- Integrate `claude-to-codex`: durable run IDs, sanitized worker environment and explicit state paths, bind on `thread.started`, incremental event ingestion, and terminal capture before optional naming/handoff. Add the cross-run ownership lock and persisted Desktop-open marker to both launcher and Desktop helper. `last-message.md` stays as each run's local record.
-- Exercise concurrent resumes, resume-versus-Desktop, launch success followed by lost launcher output, and a killed runner with a live child. Never accept a duplicate conversation as successful recovery.
-- Document both parent lifecycles: one reusable Codex heartbeat with unconditional recovery and cleanup, and the Claude background wait with `--probe`, timeout recovery and a single watcher for nested roles. Report unavailable capabilities as manual delivery.
-- Change launchers in their canonical `agent-skills` source, not copied installed links. Keep compatibility/rollback instructions for the separate repositories; switch only after their new path passes.
-- Add README installation, doctor/config/hooks examples, protocol contract and a provider support matrix per role.
-- Run the full gate, then `bun link`; verify the installed command outside the checkout.
-
-Exit condition: acceptance criteria 1–12, including 9 and 10 with both disposable live workflows below and their recovery variants; no duplicate conversations or competing file edits:
-
-- Codex→Claude: the result returns to the original Codex chat through a heartbeat after that chat's first turn ended.
-- Claude→Codex: the parent is re-invoked by its wait, answers one worker question by resuming the same thread ID, and then receives the result.
-
-### 5. `claude-threads` on Agentbus (Claude→Claude)
-
-- Replace the tracked path of `spawn.sh` with `delegate` (name, labels, contract), launch reconciliation and `session bind`. Append the skill's isolation rule after the contract, and drop the report-specific `--add-dir`, `--lead` and lead-name resolution.
-- Replace `wait.sh` and `status.sh` with `agentbus wait --timeout 30m --probe 60s` (`--settled` for batches) and `agentbus delegations`.
-- Rewrite `cleanup.sh` around `delegations --json`; `rm` also closes the delegation. Delete `threads.py`.
-- Rewrite `SKILL.md`: the phase table replaces the lifecycle table, `report.md` and `SendMessage` leave the contract, and Verified Facts that no longer apply are removed.
-- Verify with disposable children:
-  - Three children: one asking a question, one hitting a permission prompt, and one killed with `kill -9`.
-  - A child spawned after the watcher was armed.
-  - No redundant normal-finish wake after a question; a subsequent crash still surfaces.
-  - The phase table matches each child.
-  - Answering a question re-invokes the child through its own background wait.
-
-Exit condition: acceptance criteria 13–14; the skill's scripts no longer read `claude agents`, job state or transcripts except through `agentbus --probe`.
+| Milestone | Acceptance | State |
+| --- | --- | --- |
+| 1. Scaffold and contracts | — | Implemented 2026-10-01 |
+| 2. Durable mailbox | 1–4 | Implemented 2026-10-01; process-level checks |
+| 3. Worker result capture | 5–8, 11 | Implemented 2026-10-01 at the adapter level with recorded fixtures; Desktop-resume checks open |
+| 4. End-to-end delegation between providers (first release) | 1–12 | Launchers tracked by default; Claude→Codex (2026-10-01) and Codex→Claude (2026-10-04) live gates passed |
+| 5. `claude-threads` on Agentbus (Claude→Claude) | 13–14 | Implemented; live gate passed 2026-10-01 |
+| 6. Codex wake adapter | 15–16 | Not started; conditional on the spike below |
+| 7. Optional extensions | — | Not started; outside the release gates |
 
 ### 6. Codex wake adapter (conditional)
 
@@ -807,124 +737,13 @@ Use disposable provider sessions for live adapter checks. Collect the native IDs
 
 ## Remaining implementation questions
 
-None block the provider-independent mailbox milestone. Failed checks block the corresponding automatic delivery claim; they are not silently waived:
+Failed checks block the corresponding automatic delivery claim; they are not silently waived. Questions answered by live gates or fixtures are recorded in [docs/history.md](docs/history.md#resolved-implementation-questions).
 
 - Does the session UUID and `prompt_id` behave the same after Claude Desktop resume, and do per-worker `--settings` hooks stop there as expected? (3)
 - Does a background wait armed in a Desktop-owned Claude session re-invoke it? (3)
-- Can a task notification be positively associated with its originating delegated task, including completion before Stop and after unrelated manual input? (3)
-- Does `SessionEnd` fire when a working Claude session is stopped mid-turn, and what does `claude agents` show after `kill -9`? (3)
-- Which permission prompt types escape `PermissionRequest`, and can the probe distinguish permission resolution from idle/unknown without relying on model-classified state? (3)
-- Does the installed Codex JSON stream expose a native turn ID useful for later cross-source deduplication? V1 already uses its own durable `runId`. (1, 7)
-- Does `codex exec resume` from the runner keep the thread ID and pass the new environment to tool shells? (4)
-- Is `CODEX_THREAD_ID` set in Codex Desktop tool shells, as it is under `codex exec`? (4)
-- Can the target Codex app create, run and remove one heartbeat on the original chat, including after restart, and is that capability absent in headless parents? (4)
-- Which isolated provider configuration can exercise Desktop hooks without tests rewriting the user's settings? If unavailable, keep this as a separate supervised live gate with explicit hook setup. (3–4)
+- Which permission prompt types escape `PermissionRequest`, and can the probe distinguish permission resolution from idle/unknown without relying on model-classified state? `PermissionRequest` itself is verified live with `prompt_id`. (3)
+- Is `CODEX_THREAD_ID` set in Codex Desktop tool shells, as it is under `codex exec`? Heartbeat prompts pass `--as codex:<thread-id>` explicitly meanwhile. (4)
+- Does a Codex heartbeat survive a Codex app restart, and is the capability reliably absent in headless parents? Creation, wake and self-deletion on the original chat passed live. (4)
 - Can `codex queue`, through the shared app-server daemon or `--remote`, reach the backend that owns the Desktop chat, and what receipt does it expose? (6)
 
 Resolved by design: explicit contract and continuation provenance bind Claude turns; durable run IDs bind Codex runs; seen state plus unconditional recovery reads support re-arming; rollback journal remains the default. None of these substitutes for the live provider gates.
-
-## Pre-implementation evidence
-
-The following experiments were recorded by the earlier plan on 2026-09-30 with Claude Code 2.1.284 and Codex CLI 0.157.1, using disposable sessions reported as stopped. This review preserves those reports; it did not rerun live model sessions. Capture reproducible fixtures and exact versions during implementation rather than treating this table as a current compatibility guarantee.
-
-| Check | Result | Plan impact |
-| --- | --- | --- |
-| `claude --bg --session-id <uuid>` | Flag ignored; Claude assigned its own UUID | Token-claimed pending sessions replace preassignment |
-| Launcher environment into `claude --bg` | Not inherited by hooks or the Bash tool | Claude worker identity via explicit `--as` |
-| `CLAUDE_CODE_SESSION_ID` | Set in Desktop tool shells and in hook environment; absent in `--bg` Bash tool | Native detection is a convenience only |
-| `CODEX_THREAD_ID` under `codex exec` | Equals the thread ID; the launcher's environment is inherited, including a test variable and the parent's `CLAUDE_CODE_SESSION_ID` | Runner sets `AGENTBUS_SESSION_ID` and removes the leaked variable; ambiguity refusal confirmed |
-| Claude hook payloads | `prompt_id` on `UserPromptSubmit` and `Stop`; `Stop` has `last_assistant_message`, `background_tasks`, `session_crons`; `SessionStart` has `source` | Exact turn binding; notices report running background work |
-| Background command in `--bg` session | Re-invoked the session via a `<task-notification>` prompt | Claude parent wake and Claude worker follow-ups without Channels or `SendMessage` |
-| `claude agents` after a background-command turn | `state: working`, `status: idle` for over five minutes; control session reached `done` | Launcher helper stalls; readiness rule fixed in milestone 4; phases do not use provider state |
-| `claude stop` | Fires `SessionEnd` with `reason: other` | Owner release never closes a delegation |
-| Codex hooks under `codex exec` (via `-c` overrides and `--dangerously-bypass-hook-trust`) | `SessionStart`, `UserPromptSubmit` (`turn_id`, `prompt`), `Stop` (`turn_id`, `last_assistant_message`) and `SessionEnd` at exec exit; `session_id` is the thread ID; no `CODEX_THREAD_ID` in hook environment; empty stdout accepted | Codex hooks are viable later; `SessionEnd` means process exit |
-| Codex hook trust | Non-managed hooks need `/hooks` trust by exact hash; project hooks load only in trusted projects | Runner events, not hooks, are the v1 Codex observer |
-| Bun `1.4.2` (latest stable, 2026-09-05) | System SQLite `3.43.2`, same as `1.3.8`; Homebrew `3.53.4` loads via `setCustomSQLite` | Rollback journal stays |
-| `foreign_keys`, `data_version` | Default 0; changes only for other connections' commits | Per-connection pragma and polling design confirmed |
-| Hook cold path | Bun start plus read-only SQLite lookup: 10–20 ms | Target 50 ms |
-| Names | `@vforsh/agentbus` free on npm; unscoped `agentbus` taken | Keep the scoped name; recheck at publish |
-| Cited links | All return HTTP 200 | No changes |
-| Live check 2026-10-01, five Haiku `--bg` workers with per-worker `--settings` hooks (Claude Code 2.1.284) | Contract `UserPromptSubmit` claimed each pending worker; a result was attributed to its bound turn and its later Stop posted nothing; a worker without a result produced a `turn_finished` notice with its final text; a question suppressed the Stop notice, the worker's own background `agentbus wait` woke it after the parent answered and the task notification was proven a continuation through the wait receipt | Per-worker hooks, claim, notice suppression and background-wait follow-ups confirmed live |
-| Same run: permission and stop | `PermissionRequest` carried `prompt_id`; the inventory row showed `status: waiting`, `waitingFor: "permission prompt"`, `state: blocked`; `claude stop` during the prompt fired `SessionEnd` (`reason: other`) → `turn_interrupted` | Exact permission attribution works; mid-turn stop interrupts |
-| Launcher check 2026-10-01: background worker reading the external volume | Inside a later `claude --bg` worker, hooks and Bash could `stat` files under `/Volumes/Example` but `read` failed with `Operation not permitted` (macOS privacy control); the home directory stayed readable. Bun then executed the unreadable extensionless `bin/agentbus` through its shebang, which re-ran the same failing Bun: an unbounded process chain | Workers and hooks run a compiled executable on the internal disk (`bun run install:bin`); the source fallback uses `src/main.ts`, which fails instead of looping |
-| Same check: `--mode manual` worker with the per-worker `permissions.allow` rule for the Agentbus CLI | Contract commands ran without prompts; the worker's later `Write` raised `PermissionRequest` → `permission_request` notice, phase `permission`, handoff not ready; `claude stop` → `turn_interrupted` | Pre-allowing only the CLI keeps the session's permission mode for everything else |
-| Live gate 2026-10-01, Claude→Codex (Codex CLI 0.157.1, `gpt-6-luna`/low) through tracked `claude-to-codex` | The Codex worker asked a question and ended its run; this Claude parent's background `agentbus wait` re-invoked it; the answer was delivered with `spawn.sh --resume`, which kept the thread ID; a second wake-up delivered `result/success`; all launcher locks were released | Acceptance criterion 10 met for Claude→Codex |
-| Fake-codex runner checks | Retry of the same task recovered the launch instead of starting another run; a concurrent resume was refused by the thread lock; a resume after `desktopOpenRequested` was refused; runner `kill -9` with a live child → `tracking_lost`, then both dead → `turn_interrupted` | Launch, resume and Desktop ownership guards behave as specified |
-| Same run: `kill -9` of the owner (`claude bg-spare`) | No hook fired; the `claude agents` row stayed `state: working` with no `pid` or `status`; the probe's recorded PID+start identity confirmed death → `turn_interrupted` | Provider state goes stale after a crash; identity-based probes are required |
-| Live gate 2026-10-01, `claude-threads` on Agentbus (seven Haiku `--bg` children, one lead `wait --replace --probe 60s`) | Phases matched each child; question → answer → child's own wait → result posted no `turn_finished`; a child spawned after arming (in a `claude --worktree` worktree) reported to the same watcher; probe-confirmed death of a killed idle owner → `turn_interrupted` with no hook; `cleanup.sh rm` removed sessions, worktrees and branches and closed open delegations | Acceptance criteria 13–14 met |
-| Same run: `kill -9` of background owners (idle with an armed wait, and mid-turn at a permission prompt; four repeated kills) | The daemon respawned every owner within seconds: same session, new PID, `SessionStart source=resume`, same `--settings`; mid-turn it resumed the turn and re-raised the permission prompt. The respawned owner did not adopt the old owner's background tasks (`inFlight.tasks: 0`); the orphaned wait consumed the parent's answer and the child was never re-invoked. A `SendMessage` doorbell made the child read its answer and publish its result (that turn: `tracking_lost`, unattributed prompt) | A resumed owner with outstanding background work in the bound turn posts `tracking_lost` (phase `unknown`), which a live-owner probe does not repair; the earlier "stale row after `kill -9`" observation is not reproducible today, so a probe-confirmed death may be followed by a respawn |
-| Same run: `claude --bg --worktree <name>` | Creates `<root>/.claude/worktrees/<name>` on branch `worktree-<name>`; `claude agents` lists the launch directory for a moment first; `claude rm` removes worktree and branch | `delegate --allow-missing-cwd` lets launchers delegate the final worktree directory before it exists |
-
-`claude-threads` documents further facts verified with Claude desktop 2.16120: model-classified `done`/`blocked`/`working` states, `notify_when_idle` arriving late, and edit refusals in shared checkouts. They informed the phase model and the decision to keep the isolation rule in the skill.
-
-## Revision log
-
-2026-10-04, follow-ups and settlement:
-
-- Codex→Claude live gate passed with real tasks (heartbeat wake 63 s after the result, acknowledgement, self-deletion after the last delegation closed). The same runs showed parent follow-ups never reaching working workers.
-- A parent's `send` to the worker of its open delegation joins that correlation. The per-worker Claude hooks add `PostToolUse` and ring a doorbell on it and on `Stop` (see "Mid-task follow-ups"); the hook command keeps stdout for that decision. The contract tells workers to expect follow-ups and to re-read before their result. Verified live with two Haiku workers.
-- Migration 004 adds `receipts.settled_reason`. A delegation's terminal transition settles its leftover mail (result: the worker's side; parent close: both sides), and the migration backfills finished delegations, including follow-ups sent before they joined the correlation.
-- `delegations --global` lists every parent's delegations without a caller identity, with the parent named.
-
-2026-10-01, milestone 5 (`claude-threads` on Agentbus):
-
-- `claude-threads` launches through `delegate` with labels, launch manifests and locks, the contract plus a `<thread-rules>` isolation rule, per-worker `--settings` and `session bind`; `cleanup.sh` resolves children through `delegations --json` and `rm` closes their delegations. `threads.py`, `wait.sh` and `status.sh` are gone (scripts about 980 → 630 lines); rollback tag `claude-threads-v1-registry` in agent-skills.
-- `wait --replace` enforces one watcher per session: a superseded wait exits with `reason: superseded` without claiming mail (checked inside the claiming transaction).
-- `delegate --allow-missing-cwd` resolves a directory a launcher creates later (`claude --worktree`) through its nearest existing ancestor, so the contract claim still checks the exact final path.
-- `delegations` views carry `worker {externalId, shortId, cwd}` for launcher scripts.
-- A Claude `SessionStart source=resume` while the bound turn's background work is outstanding posts `tracking_lost`: the respawned owner does not adopt the previous owner's tasks. Recovery is a provider-native doorbell from the lead.
-- Review fixes: a tracking loss recorded by a probe in the respawn window is converted to the permanent orphaned-wait loss on resume; the Claude worker contract arms its wait with `--replace`, so a re-armed wait retires an orphan; a superseded wake tells the consumer not to re-arm. In `claude-threads`: worktree refusal before delegating, key over the resolved directory, reconciliation of interrupted launches (relaunch only when the launcher positively ended and no session of that name started), re-read under the lock, and probe-guarded `cleanup --settled`.
-
-2026-10-01, milestone 4 launchers:
-
-- `codex-to-claude` and `claude-to-codex` are tracked by default (`--no-track` keeps the plain path): keyed `delegate`, launch manifests, request/thread ownership locks, contract appended to the prompt, `session bind`, runner events with durable run IDs and a sanitized worker environment, persisted Desktop-open marker, and the Desktop handoff guard based on `delegations` handoff readiness (latest Stop listed no background tasks or scheduled wakeups; migration 003 records the latter) plus a fresh idle probe.
-- Worker settings pre-allow the Agentbus CLI. Workers and hooks run a standalone executable on the internal disk because background sessions can lose read access to external volumes.
-
-2026-10-01, per-worker Claude hooks:
-
-- User-level hook installation became optional. `delegate --to claude` writes a per-worker settings file for `claude --bg --settings`, so Agentbus code runs only in its own workers. Lifecycle observation of a Claude worker is guaranteed while its background owner runs it; after a Desktop handoff it relies on explicit replies and probes, matching the Codex worker scope.
-
-2026-10-01, correctness review:
-
-- Separated release targets from verified primitives; retained live capability gates and manual fallback when wake facilities are absent.
-- Made `read --unseen` non-mutating, acknowledgement imply seen, and recovery reads mandatory on every wake. Defined bounded pagination and batch waits that surface attention before settlement.
-- Defined role/correlation and terminal-state invariants, one open delegation per worker, and request-intent idempotency independent of generated IDs and later task state.
-- Replaced turn/type event deduplication with captured occurrence IDs and durable run/turn bindings. Restricted task-notification inheritance to proven provenance; retained terminal lifecycle evidence after result publication.
-- Added spool-only wake recovery, stale-event/probe handling, unknown tracking state, and PID/start-identity checks for both runner and child.
-- Required durable launch/resume/handoff ownership and ambiguous-launch reconciliation. Found that the current Codex Desktop helper prints its open flag without persisting it and the spawn script has no cross-run resume lock; these now have explicit implementation gates.
-- Narrowed wake fencing claims to what a database can enforce; ambiguous external dispatch is never automatically repeated.
-
-Review evidence: the checkout contains only `PLAN.md`; local launcher scripts and Codex CLI help were inspected without launching sessions. Current [Claude hook documentation](https://code.claude.com/docs/en/hooks#permissionrequest-input) confirms that permission-request payloads lack a tool-use ID; the [Codex JSON event example](https://learn.chatgpt.com/docs/non-interactive-mode#make-output-machine-readable) omits a native turn ID; the [SQLite WAL documentation](https://www.sqlite.org/wal.html#walreset) supports retaining the rollback-journal choice.
-
-Earlier entries below describe the design at that time; this review supersedes conflicting statements.
-
-2026-10-01, Claude→Claude and `claude-threads`:
-
-- Claude→Claude became a target direction, and milestone 5 migrates `claude-threads` onto Agentbus. The Codex wake adapter moved to milestone 6 and the optional extensions to milestone 7.
-- Per-message seen state replaced client-side cursors for re-arming: `wait` returns each message once, `read` stays non-mutating. This also lets a static heartbeat prompt work.
-- `delegate` opens a delegation in one step (pending worker, request, generated worker contract), shared by all three launchers.
-- Delegations gained derived phases and a `delegations` table, and sessions gained display labels. Messages gained a one-line `summary`.
-- `turn_finished` notices are suppressed when the worker reported explicitly in that turn. `turn_interrupted` covers a mid-turn `SessionEnd` and `wait --probe` liveness checks.
-- `wait` gained `--settled` and `--probe`; Claude workers arm their own background wait after asking, so no provider-native messaging is required.
-
-2026-09-30, bidirectional delegation:
-
-- Both directions ship in the first release. The protocol uses parent and worker roles, and a table maps each provider role to its launcher, observer, follow-up path and wake path.
-- Pending registration and `session bind` cover both providers: token claims for Claude, `thread.started` for Codex.
-- The existing `claude-to-codex` runner is the Codex worker observer while `codex exec` owns the thread; Codex hooks became optional because they need per-hash trust.
-- A Claude parent is woken by a background wait with a 30-minute timeout re-arm; a Codex parent keeps the heartbeat.
-- Answers to a Codex worker are delivered by the Claude parent resuming the same thread through the launcher, with fork and Desktop-ownership guards. Agentbus never resumes on its own.
-- `SessionEnd` became `owner_released` and no longer closes delegations; `api_error` became `turn_failed` for both providers; observation event IDs are deterministic per turn.
-
-2026-09-30 review:
-
-- Token-claimed pending Claude sessions replace post-launch registration and unmatched-event reconciliation; the evidence check showed `--bg` ignores `--session-id`.
-- Caller identity falls back to native session environment (`CLAUDE_CODE_SESSION_ID`, `CODEX_THREAD_ID`), with refusal on cross-provider ambiguity, and gains `whoami`.
-- Turn binding uses `prompt_id`; task-notification prompts continue a bound turn. The launcher helper's `state=done` readiness bug is recorded, with its fix scheduled in milestone 4.
-- Hooks write to SQLite directly and spool only on failure, so result capture needs no watcher process. Hooks subscribe only to six low-frequency events, print nothing, always exit 0 and tolerate a missing binary.
-- Observer output became a distinct `notice` type from `system:observer`; the `error` type folded into `result` with `outcome: failed`.
-- Requests open delegations; a prompt token binds turns, so later manual turns are not attributed.
-- `read` and `wait` gained cursors and filters, fixing a busy loop on deliberately pending messages; `wait` accepts up to 24 hours for the background-wait pattern.
-- Milestones reordered: end-to-end delegation is the first release; the Codex wake adapter, its outbox, leases and worker became a conditional later milestone.
-- Journal mode is fixed to rollback in v1; `init --journal` removed; per-connection pragmas and `data_version` polling specified.
-- `sequence` is a JSON integer; `read --unread` removed as redundant with the default.

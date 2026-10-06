@@ -180,7 +180,7 @@ Recorded evidence lives in `tests/fixtures/` (Claude Code 2.1.284, Codex CLI 0.1
 
 ### Live checks
 
-Verified on 2026-10-01 with five disposable Haiku `--bg` workers using per-worker `--settings` hooks (see PLAN "Pre-implementation evidence"): contract claim, result attribution and Stop suppression, fallback `turn_finished`, question → background-wait wake-up → result, `PermissionRequest` with `prompt_id`, `claude stop` mid-turn → `turn_interrupted`, and `kill -9` → stale `claude agents` row but probe-confirmed `turn_interrupted`.
+Verified on 2026-10-01 with five disposable Haiku `--bg` workers using per-worker `--settings` hooks (see [Pre-implementation evidence](docs/history.md#pre-implementation-evidence)): contract claim, result attribution and Stop suppression, fallback `turn_finished`, question → background-wait wake-up → result, `PermissionRequest` with `prompt_id`, `claude stop` mid-turn → `turn_interrupted`, and `kill -9` → stale `claude agents` row but probe-confirmed `turn_interrupted`.
 
 Claude→Codex live gate (2026-10-01): a real `codex exec` worker asked a question, the Claude parent's background `agentbus wait` re-invoked it, the answer went through `spawn.sh --resume` on the same thread ID, and the result arrived through a second wake-up.
 
@@ -196,4 +196,3 @@ Still open:
 
 - Claude: session UUID and `prompt_id` across Desktop resume, and whether per-worker `--settings` hooks stop there; background wait re-invocation in a Desktop-owned session.
 - Codex: `CODEX_THREAD_ID` in Desktop tool shells (heartbeat prompts pass `--as codex:<thread-id>` explicitly).
-- Launchers: durable launch manifests, cross-run ownership lock and persisted Desktop-open marker in `claude-to-codex`; fresh-idle handoff guard in `codex-to-claude`.
