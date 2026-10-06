@@ -1,7 +1,7 @@
 import type { Command } from "commander";
-import { workerSettingsPath, writeHooksSettings } from "../../adapters/claude/settings.ts";
+import { workerSettings, workerSettingsPath, writeHooksSettings } from "../../adapters/claude/settings.ts";
 import { AgentbusError, EXIT, usageError } from "../../errors.ts";
-import { CONTRACT_VERSION, renderContract } from "../../protocol/contract.ts";
+import { CONTRACT_VERSION, renderContract, workerBinPath, workerBinScript } from "../../protocol/contract.ts";
 import { BODY_LIMIT, type Provider } from "../../protocol/types.ts";
 import { requireCaller } from "../../services/caller.ts";
 import { delegate, findDelegation, proposeReturnPath, selectDelegation } from "../../services/mailbox.ts";
@@ -80,7 +80,15 @@ export function registerDelegate(program: Command): void {
               configPath: ctx.paths.configPath,
             });
             ctx.emit(
-              { dryRun: true, workerId, requestId, ...rp, contractVersion: CONTRACT_VERSION, contract },
+              {
+                dryRun: true,
+                workerId,
+                requestId,
+                ...rp,
+                contractVersion: CONTRACT_VERSION,
+                contract,
+                workerBin: workerBinPath(ctx.paths.stateDir, workerId),
+              },
               () => contract,
             );
             return;
@@ -114,12 +122,24 @@ export function registerDelegate(program: Command): void {
             contractVersion: r.delegation.contract_version,
             contract: r.delegation.contract,
             contractOut: opts.contractOut ?? null,
+            // The single executable the contract tells the worker to run.
+            workerBin: workerBinPath(ctx.paths.stateDir, r.worker.id),
             // Claude workers get Agentbus hooks only through this file: `claude --bg --settings <file>`.
             claudeSettings: provider === "claude" ? workerSettingsPath(ctx.paths, r.worker.id) : null,
           };
+          try {
+            writeFileAtomic(data.workerBin, workerBinScript({ ...ctx.paths, workerId: r.worker.id }), 0o700);
+          } catch (err) {
+            throw new AgentbusError(
+              "worker_bin_write_failed",
+              `Delegation committed but the worker executable could not be written: ${(err as Error).message}`,
+              EXIT.failure,
+              { workerId: r.worker.id, requestId: r.request.id, workerBin: data.workerBin },
+            );
+          }
           if (data.claudeSettings) {
             try {
-              writeHooksSettings(data.claudeSettings, ctx.paths);
+              writeHooksSettings(data.claudeSettings, ctx.paths, workerSettings(ctx.paths, r.worker.id));
             } catch (err) {
               throw new AgentbusError(
                 "worker_settings_write_failed",

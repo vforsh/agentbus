@@ -4,7 +4,7 @@
 
 import { Database } from "bun:sqlite";
 import type { Resolved } from "../../config/config.ts";
-import { workerCommand } from "../../protocol/contract.ts";
+import { workerBinCommand } from "../../protocol/contract.ts";
 import { claimFollowUps, type FollowUps, hasFollowUps } from "../../services/followups.ts";
 import { openStore } from "../../store/db.ts";
 import { fileExists } from "../../util/fsx.ts";
@@ -47,7 +47,7 @@ function claim(paths: Resolved, nativeSid: string, deadline: number): FollowUps 
 }
 
 function announcement(paths: Resolved, f: FollowUps, event: DoorbellEvent): string {
-  const ab = workerCommand({ ...paths, workerId: f.workerId });
+  const ab = workerBinCommand(paths.stateDir, f.workerId);
   const lines = f.messages.map((m) => {
     const gist = (m.summary ?? m.body.split("\n").find((l) => l.trim()) ?? "").trim();
     return `- ${m.id} (${m.type}): ${gist.length > 160 ? `${gist.slice(0, 159)}…` : gist}`;

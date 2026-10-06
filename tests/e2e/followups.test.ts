@@ -97,7 +97,9 @@ describe("parent follow-ups", () => {
     expect(out.hookSpecificOutput.hookEventName).toBe("PostToolUse");
     const text: string = out.hookSpecificOutput.additionalContext;
     expect(text).toContain(`${f.messageId} (message): Staging watcher is up`);
-    expect(text).toContain(`--as ${w.workerId} read --from ${leadId} --json`);
+    expect(text).toContain(
+      `${join(s.stateDir, "workers", w.workerId, "agentbus")} read --from ${leadId} --json`,
+    );
     expect(text).toContain(`ack ${f.messageId}`);
     // Announced means seen: the next tool call stays quiet, and the worker still reads and acknowledges.
     expect(toolCall(w).stdout).toBe("");

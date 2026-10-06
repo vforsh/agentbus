@@ -81,10 +81,10 @@ agentbus session register --provider claude --external-id "$CLAUDE_CODE_SESSION_
 agentbus delegate --to codex --name executor --cwd ~/dev/project --key task-002 --file request.md --json
 agentbus wait --replace --timeout 30m --probe 60s --json   # as a background command
 
-# Worker (follows the generated <agentbus-contract> block)
-agentbus --as <worker-id> read --correlation <request-id> --json
-agentbus --as <worker-id> ack <request-id>
-agentbus --as <worker-id> reply <request-id> --type result --outcome success --key result-1 \
+# Worker (follows the generated <agentbus-contract> block; <worker-bin> fixes store and --as)
+<worker-bin> read --correlation <request-id> --json
+<worker-bin> ack <request-id>
+<worker-bin> reply <request-id> --type result --outcome success --key result-1 \
   --summary "Parser fixed; tests pass" --file result.md
 
 # Parent: new facts mid-task (refused with exit 5 once the delegation has ended)
@@ -147,7 +147,7 @@ Global: `--as`, `--config`, `--state-dir`, `--json`, `--plain`, `-q`, `-v`, `--n
 - **Settlement**: a delegation's terminal transition acknowledges mail nobody needs to handle any more, with `settledReason`: a result settles the worker's side (`delegation_done`), a parent's `close` the whole correlation (`delegation_closed`). The result itself stays with the parent.
 - **Return path**: `returnPathStatus` (`ready|setup_required|unsupported|unknown`) and `returnReadiness` in `delegate`, `delegations`, `explain` and `doctor` are derived from current evidence each time, never from a flag. A background wait counts (`armed`) while its process (PID plus start time) and the ancestors that armed it are alive, it has not expired and it covers the delegation: unfiltered waits cover every delegation of the session, including later ones; `--correlation` one request; `--settled` the delegations open when armed; `--from`/`--type` none. A killed or timed-out wait is `not_armed`, a wait whose owner exited is `owner_lost`, and an arm whose process cannot be checked (or predates schema v6) is `unverified` (`unknown`). Heartbeats are app-only, so a Codex parent records a check-in on each run (`session update <me> --refresh`); one older than three binding `interval`s (default 15 minutes) is `stale` (`unknown`). Delegation rows keep the status proposed when they opened.
 - **Delivery**: unseen → seen (by `wait` or the doorbell) → acknowledged (by `ack`, or by settlement). Concurrent waits partition, they do not broadcast; run one watcher per session. `wait --replace` enforces that: it retires the caller's other running waits, which exit 0 with `reason: superseded` without claiming mail.
-- **Worker contract v1**: delimited `<agentbus-contract version="1">` block naming request, worker, parent and provider, with exact commands including `--state-dir`, `--config` and `--as`. The first Claude `UserPromptSubmit` carrying exactly one unquoted block, from the expected directory, claims the pending worker.
+- **Worker contract v1**: delimited `<agentbus-contract version="1">` block naming request, worker, parent and provider, whose commands run a per-worker executable (`workerBin`, `<state-dir>/workers/<worker-id>/agentbus`) that fixes `--state-dir`, `--config` and `--as`; a single path, so it survives a shell variable in zsh and fish. The first Claude `UserPromptSubmit` carrying exactly one unquoted block, from the expected directory, claims the pending worker.
 - **Observation**: Claude hooks and Codex runner events become turn bindings and observations. `turn_finished` notices are suppressed when that exact turn produced a question or result. Task notifications continue a delegated Claude turn only with proven provenance: a verified wait arm recorded by `agentbus wait` inside that turn, or a background task first seen in that turn's Stop inventory against a known baseline. Anything else supersedes the binding (phase `unknown`, `tracking_lost` notice).
 - **Ordering**: hook events of one session commit in capture order. While any event of that session sits in the spool, later events drain it first or queue behind it; a delayed prompt or Stop never rebinds or overwrites a newer turn. Permission and failure events are posted only when attributable to a bound turn.
 
@@ -168,7 +168,7 @@ Kinds: `run_started` (before exec; `resumeThreadId` for resumes), `child_started
 
 | Capability | Claude worker | Codex worker | Claude parent | Codex parent |
 | --- | --- | --- | --- | --- |
-| Identity | `--as` from contract (bg Bash has no session env) | `AGENTBUS_SESSION_ID` from runner, plus `--as` | `CLAUDE_CODE_SESSION_ID` | `CODEX_THREAD_ID` |
+| Identity | `--as` baked into the contract's worker executable (bg Bash has no session env) | `AGENTBUS_SESSION_ID` from runner, plus `--as` | `CLAUDE_CODE_SESSION_ID` | `CODEX_THREAD_ID` |
 | Binding | Contract claim on `UserPromptSubmit` + launcher `session bind` | Runner `thread_started` | — | — |
 | Final response | `Stop.last_assistant_message` notice (fixture-verified) | Runner `run_finished` final message | — | — |
 | Failure | `StopFailure` → `turn_failed` | Nonzero/incomplete run → `turn_failed` | — | — |

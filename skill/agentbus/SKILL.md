@@ -68,7 +68,7 @@ Readiness is derived from the running watcher, not recorded: `returnPathStatus` 
 
 ## As a worker
 
-Your prompt carries an `<agentbus-contract version="1">` block. Follow it exactly; it fixes the CLI path, store paths and `--as`. In short:
+Your prompt carries an `<agentbus-contract version="1">` block. Follow it exactly. Run every command through the executable it names (`<state-dir>/workers/<worker-id>/agentbus`), which fixes the CLI, store paths and `--as`; it is one path, so keeping it in a shell variable is safe. Never put the multi-word fallback prefix in a variable: zsh and fish do not word-split it (exit 127). In short:
 
 1. `read --correlation <request-id> --json`, then `ack <request-id>`.
 2. Optional `reply <request-id> --type progress --summary ...` at real milestones only.

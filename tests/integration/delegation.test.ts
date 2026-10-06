@@ -118,7 +118,51 @@ describe("delegate", () => {
     expect(existsSync(d.claudeSettings)).toBe(true);
     const codex = s.ok(["delegate", "--to", "codex", "--file", "-"], { as: LEAD, input: "codex" });
     expect(codex.claudeSettings).toBeNull();
-    expect(existsSync(join(s.stateDir, "workers", codex.workerId))).toBe(false);
+    expect(existsSync(join(s.stateDir, "workers", codex.workerId, "claude-settings.json"))).toBe(false);
+    expect(settings.permissions.allow).toContain(`Bash(${d.workerBin}:*)`);
+  });
+
+  test("the contract's worker executable works from a shell variable in sh, bash, zsh and fish", () => {
+    const d = s.ok(["delegate", "--to", "codex", "--file", "-", "--key", "shells"], {
+      as: LEAD,
+      input: "shell task",
+    });
+    expect(d.workerBin).toBe(join(s.stateDir, "workers", d.workerId, "agentbus"));
+    expect(statSync(d.workerBin).mode & 0o777).toBe(0o700);
+    expect(d.contract).toContain(`  ${d.workerBin}\n`);
+    expect(d.contract).toContain(`${d.workerBin} ack ${d.requestId}`);
+    // No store env: the executable alone must carry CLI, store paths and identity.
+    const env = s.env({ AGENTBUS_STATE_DIR: undefined, AGENTBUS_CONFIG: undefined });
+    const scripts: Record<string, string> = {
+      sh: 'AB="$BIN"; $AB whoami --json',
+      bash: 'AB="$BIN"; $AB whoami --json',
+      zsh: 'AB="$BIN"; $AB whoami --json',
+      fish: "set AB $BIN; $AB whoami --json",
+    };
+    for (const [shell, script] of Object.entries(scripts)) {
+      const path = Bun.which(shell);
+      if (!path) continue;
+      const res = Bun.spawnSync([path, "-c", script], {
+        env: { ...env, BIN: d.workerBin },
+        cwd: s.dir,
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      expect({ shell, code: res.exitCode, stderr: res.stderr.toString() }).toEqual({
+        shell,
+        code: 0,
+        stderr: "",
+      });
+      expect(JSON.parse(res.stdout.toString()).data.session.id).toBe(d.workerId);
+    }
+    // A keyed retry restores a missing executable without another worker.
+    rmSync(d.workerBin);
+    const retry = s.ok(["delegate", "--to", "codex", "--file", "-", "--key", "shells"], {
+      as: LEAD,
+      input: "shell task",
+    });
+    expect(retry.workerId).toBe(d.workerId);
+    expect(existsSync(d.workerBin)).toBe(true);
   });
 
   test("dry-run prints the contract with preview IDs and writes nothing", () => {

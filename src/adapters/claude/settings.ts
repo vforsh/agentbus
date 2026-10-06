@@ -8,6 +8,7 @@ import { join } from "node:path";
 import type { Resolved } from "../../config/config.ts";
 import { shellQuote } from "../../config/config.ts";
 import { conflict, failure } from "../../errors.ts";
+import { workerBinCommand, workerDir } from "../../protocol/contract.ts";
 import { fileExists, modeOf, writeFileAtomic } from "../../util/fsx.ts";
 
 export const HOOK_EVENTS = [
@@ -50,14 +51,17 @@ export function hooksSettings(paths: Resolved): Json {
 }
 
 export const workerSettingsPath = (paths: Resolved, workerId: string): string =>
-  join(paths.stateDir, "workers", workerId, "claude-settings.json");
+  join(workerDir(paths.stateDir, workerId), "claude-settings.json");
 
 /**
- * A worker's private settings: the hooks plus a permission rule for exactly this Agentbus CLI, so the
- * contract's commands never stop on a prompt. Other tools keep the session's permission mode.
+ * A worker's private settings: the hooks plus permission rules for exactly this Agentbus CLI and, given a
+ * worker, its executable, so the contract's commands never stop on a prompt. Other tools keep the session's
+ * permission mode.
  */
-export function workerSettings(paths: Resolved): Json {
-  return { ...hooksSettings(paths), permissions: { allow: [`Bash(${paths.cliCommand}:*)`] } };
+export function workerSettings(paths: Resolved, workerId?: string): Json {
+  const allow = [`Bash(${paths.cliCommand}:*)`];
+  if (workerId) allow.push(`Bash(${workerBinCommand(paths.stateDir, workerId)}:*)`);
+  return { ...hooksSettings(paths), permissions: { allow } };
 }
 
 /** Writes (or rewrites) a settings file atomically; safe to repeat on keyed retries. */
