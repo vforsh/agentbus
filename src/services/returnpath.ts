@@ -157,26 +157,26 @@ function reportedBinding(parent: SessionRow, now: number): ReportedBinding | nul
 export function returnPathResolver(db: Db, now = Date.now()) {
   const armCache = new Map<string, { arm: WaitArmRow; state: ArmState }[]>();
   const evaluated = (parentId: string) => {
-    let hit = armCache.get(parentId);
-    if (!hit) {
-      const arms = openWaitArms(db, parentId);
-      // One ps call for every identity of every unended arm of this parent.
-      const ids = arms.flatMap((a) => [
-        parseJson<ProcessIdentity>(a.process),
-        ...(parseJson<ProcessIdentity[]>(a.owner) ?? []),
-      ]);
-      const known = ids.filter((x): x is ProcessIdentity => !!x);
-      const results = new Map<string, Liveness>();
-      if (known.length > 0) {
-        const lv = livenessAll(known);
-        for (const [i, id] of known.entries()) results.set(`${id.pid}:${id.start}`, lv[i]!);
-      }
-      const probe = (list: ProcessIdentity[]) =>
-        list.map((id) => results.get(`${id.pid}:${id.start}`) ?? "unknown");
-      hit = arms.map((arm) => ({ arm, state: armState(arm, now, probe) }));
-      armCache.set(parentId, hit);
+    const cached = armCache.get(parentId);
+    if (cached) return cached;
+
+    const arms = openWaitArms(db, parentId);
+    // One ps call for every identity of every unended arm of this parent.
+    const ids = arms.flatMap((a) => [
+      parseJson<ProcessIdentity>(a.process),
+      ...(parseJson<ProcessIdentity[]>(a.owner) ?? []),
+    ]);
+    const known = ids.filter((x): x is ProcessIdentity => !!x);
+    const results = new Map<string, Liveness>();
+    if (known.length > 0) {
+      const liveness = livenessAll(known);
+      for (const [i, id] of known.entries()) results.set(`${id.pid}:${id.start}`, liveness[i]!);
     }
-    return hit;
+    const probe = (list: ProcessIdentity[]) =>
+      list.map((id) => results.get(`${id.pid}:${id.start}`) ?? "unknown");
+    const evaluatedArms = arms.map((arm) => ({ arm, state: armState(arm, now, probe) }));
+    armCache.set(parentId, evaluatedArms);
+    return evaluatedArms;
   };
 
   /** `waitOnly` judges just the session's own waits (a worker waiting for its answer), never a heartbeat. */
@@ -208,15 +208,17 @@ export function returnPathResolver(db: Db, now = Date.now()) {
     }
     const unverified = pick("unverified");
     if (unverified) {
+      let reason = "an unended watcher could not record its process identity when armed";
+      if (unverified.arm.process) {
+        reason = "an unended watcher exists, but its process could not be checked";
+      } else if (unverified.arm.scope === null) {
+        reason = "an unended watcher from an older agentbus has no recorded process identity";
+      }
       return {
         ...base,
         status: "unknown",
         readiness: "unverified",
-        reason: unverified.arm.process
-          ? "an unended watcher exists, but its process could not be checked"
-          : unverified.arm.scope === null
-            ? "an unended watcher from an older agentbus has no recorded process identity"
-            : "an unended watcher could not record its process identity when armed",
+        reason,
         evidenceAt: unverified.arm.created_at,
         source: "wait_arm",
         watcher: watcher(unverified.arm, "unverified"),
@@ -249,25 +251,26 @@ export function returnPathResolver(db: Db, now = Date.now()) {
         };
       }
       const age = reported.checkedAt ? formatAge(reported.checkedAt, now) : "?";
-      return reported.fresh
-        ? {
-            ...base,
-            status: "ready",
-            readiness: "reported",
-            reason: `heartbeat checked in ${age} ago (fresh for ${formatMs(reported.staleAfterMs)}); app automations cannot be verified by agentbus`,
-            evidenceAt: reported.checkedAt,
-            source: "parent_report",
-            watcher: null,
-          }
-        : {
-            ...base,
-            status: "unknown",
-            readiness: "stale",
-            reason: `last heartbeat check-in was ${age} ago, older than its freshness window; the heartbeat may be gone`,
-            evidenceAt: reported.checkedAt,
-            source: "parent_report",
-            watcher: null,
-          };
+      if (reported.fresh) {
+        return {
+          ...base,
+          status: "ready",
+          readiness: "reported",
+          reason: `heartbeat checked in ${age} ago (fresh for ${formatMs(reported.staleAfterMs)}); app automations cannot be verified by agentbus`,
+          evidenceAt: reported.checkedAt,
+          source: "parent_report",
+          watcher: null,
+        };
+      }
+      return {
+        ...base,
+        status: "unknown",
+        readiness: "stale",
+        reason: `last heartbeat check-in was ${age} ago, older than its freshness window; the heartbeat may be gone`,
+        evidenceAt: reported.checkedAt,
+        source: "parent_report",
+        watcher: null,
+      };
     }
     if (strategy === "manual" || strategy === "adapter") {
       return {
@@ -309,12 +312,9 @@ export function returnPathResolver(db: Db, now = Date.now()) {
         watcher: null,
       };
     }
-    const why =
-      last.state === "dead"
-        ? "ended without recording an exit (killed or crashed)"
-        : last.state === "expired"
-          ? "is past its timeout without recording an exit"
-          : (ENDED_BECAUSE[last.arm.end_reason ?? ""] ?? `ended (${last.arm.end_reason})`);
+    let why = ENDED_BECAUSE[last.arm.end_reason ?? ""] ?? `ended (${last.arm.end_reason})`;
+    if (last.state === "dead") why = "ended without recording an exit (killed or crashed)";
+    else if (last.state === "expired") why = "is past its timeout without recording an exit";
     const at = last.arm.ended_at ?? last.arm.expires_at ?? last.arm.created_at;
     return {
       ...base,
