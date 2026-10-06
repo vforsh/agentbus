@@ -81,6 +81,7 @@ Your prompt carries an `<agentbus-contract version="1">` block. Follow it exactl
 - Claude workers are observed through per-worker hooks: start them with `claude --bg --settings <claudeSettings>` from the `delegate` receipt. The same hooks ring the follow-up doorbell (`PostToolUse`, `Stop`). After a Desktop handoff only explicit replies and `--probe` remain. `agentbus hooks claude install|uninstall|status|print [--dry-run]` manages an optional user-level install that also covers handed-off sessions but runs in every Claude session.
 - `agentbus config set codexBin=/path claudeBin=/path`, `config get|unset|import|export|path|ls`.
 - `agentbus status [<session>] [--probe]`, `agentbus event drain`.
+- `agentbus prune [--older-than 7d] [--dry-run]` — store maintenance: deletes `delegate`-created workers that finished and went quiet before the cutoff, with their history; never registered sessions or a parent's unacknowledged mail.
 
 ## Exit codes
 

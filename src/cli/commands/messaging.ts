@@ -6,6 +6,7 @@ import {
   BODY_LIMIT,
   DEFAULT_LIMIT,
   MAX_LIMIT,
+  MAX_WAIT_MS,
   MESSAGE_TYPES,
   type MessageType,
   OUTCOMES,
@@ -304,7 +305,7 @@ export function registerMessaging(program: Command): void {
           },
         ) => {
           const timeoutMs = parseDuration(opts.timeout, "--timeout");
-          if (timeoutMs > 24 * 3_600_000) throw usageError("--timeout must be at most 24h");
+          if (timeoutMs > MAX_WAIT_MS) throw usageError("--timeout must be at most 24h");
           const probeMs = opts.probe ? parseDuration(opts.probe, "--probe") : null;
           if (probeMs !== null && probeMs < 10_000) throw usageError("--probe must be at least 10s");
           if (opts.settled && (opts.after || opts.from || opts.type)) {

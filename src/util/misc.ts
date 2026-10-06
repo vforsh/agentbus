@@ -33,10 +33,10 @@ export const sha256 = (s: string): string => createHash("sha256").update(s).dige
 
 export const hashIntent = (intent: unknown): string => sha256(canonicalJson(intent));
 
-const DURATION_RE = /^(\d+)(ms|s|m|h)$/;
-const DURATION_UNITS: Record<string, number> = { ms: 1, s: 1000, m: 60_000, h: 3_600_000 };
+const DURATION_RE = /^(\d+)(ms|s|m|h|d)$/;
+const DURATION_UNITS: Record<string, number> = { ms: 1, s: 1000, m: 60_000, h: 3_600_000, d: 86_400_000 };
 
-/** Parses positive durations such as `250ms`, `30s`, `30m`, `2h` into milliseconds. */
+/** Parses positive durations such as `250ms`, `30s`, `30m`, `2h`, `7d` into milliseconds. */
 export function parseDuration(text: string, flag: string): number {
   const m = DURATION_RE.exec(text.trim());
   if (!m)

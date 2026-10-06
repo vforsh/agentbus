@@ -59,6 +59,8 @@ export type ReturnPathStatus = "setup_required" | "ready" | "unsupported";
 
 /** Bodies above 1 MiB are rejected; batches are bounded at 4 MiB of body text. */
 export const BODY_LIMIT = 1024 * 1024;
+/** Longest `wait --timeout`; an unended wait arm older than this cannot belong to a running wait. */
+export const MAX_WAIT_MS = 24 * 3_600_000;
 export const BATCH_BODY_BUDGET = 4 * 1024 * 1024;
 export const SUMMARY_LIMIT = 200;
 export const DEFAULT_LIMIT = 50;

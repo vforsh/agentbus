@@ -37,6 +37,8 @@ agentbus init
 agentbus doctor
 ```
 
+Finished history stays until pruned: `agentbus prune --dry-run` lists workers created by `delegate` whose delegations ended, and whose mail, observations and waits went quiet, more than 7 days ago (`--older-than`); `agentbus prune` deletes them with their history. Registered sessions (parents) are never pruned, and a parent's unacknowledged mail keeps its worker. Worker settings files are kept so a resumed background owner can still start.
+
 After pulling changes, rebuild with `bun run install:bin` and run `agentbus init` to apply schema migrations; commands refuse an older schema until then.
 
 `install:bin` compiles a standalone executable to `${XDG_DATA_HOME:-~/.local/share}/agentbus/bin/agentbus` (~60 MB, includes the Bun runtime). Worker contracts and hooks run that copy whenever it exists. Background Claude sessions can be denied reads on external volumes by macOS privacy controls (observed: `stat` succeeds, `read` fails with `Operation not permitted`), so the CLI that workers execute must live on the internal disk. Rebuild after changing the checkout; `agentbus doctor` warns when the installed copy is stale or when workers would run from an external volume.
@@ -107,6 +109,7 @@ agentbus status [<session>] [--probe]
 agentbus event ingest --provider claude --source hook        # stdin, silent; used by hooks
 agentbus event ingest --provider codex --source runner --file <event.json>
 agentbus event drain
+agentbus prune [--older-than 7d] [--dry-run]
 agentbus hooks claude print|install|uninstall|status [--dry-run]
 agentbus config|cfg list|ls|path|get|set|unset|import|export
 ```
