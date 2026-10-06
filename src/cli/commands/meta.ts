@@ -1,8 +1,25 @@
 import type { Command, Option } from "commander";
+import { buildInfo } from "../../build-info.ts";
 import { usageError } from "../../errors.ts";
 import { action } from "../action.ts";
 
 export const SKILL_URL = "https://github.com/vforsh/agentbus/tree/main/skill/agentbus";
+
+export function registerBuildInfo(program: Command): void {
+  program
+    .command("build-info")
+    .description("Print build identity and supported mailbox schema")
+    .action(
+      action((ctx) => {
+        const info = buildInfo();
+        ctx.emit(
+          info,
+          () =>
+            `${info.version} ${info.compiled ? "compiled" : "source"}\ncommit ${info.commit ?? "unknown"}${info.dirty ? " (dirty)" : ""}\nsource ${info.sourceHash}\nschema ${info.schemaVersion}\nbuilt  ${info.builtAt ?? "not compiled"}\nbun    ${info.bunVersion}`,
+        );
+      }),
+    );
+}
 
 export function registerSkill(program: Command): void {
   program

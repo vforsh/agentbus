@@ -7,7 +7,7 @@ import { registerEvent } from "./commands/event.ts";
 import { registerExplain } from "./commands/explain.ts";
 import { registerHooks } from "./commands/hooks.ts";
 import { registerMessaging } from "./commands/messaging.ts";
-import { registerCompletion, registerSkill } from "./commands/meta.ts";
+import { registerBuildInfo, registerCompletion, registerSkill } from "./commands/meta.ts";
 import { registerPrune } from "./commands/prune.ts";
 import { registerInit, registerSessionCommands, registerWhoami } from "./commands/session.ts";
 import { registerStatus } from "./commands/status.ts";
@@ -49,6 +49,7 @@ export function buildProgram(opts: { quietErrors?: boolean } = {}): Command {
   registerHooks(program);
   registerConfig(program);
   registerDoctor(program);
+  registerBuildInfo(program);
   registerSkill(program);
   registerCompletion(program);
   return program;

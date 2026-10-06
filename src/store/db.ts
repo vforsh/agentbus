@@ -119,44 +119,47 @@ export function initStore(paths: Resolved): InitResult {
     if (journal?.toLowerCase() !== "delete") {
       throw failure("journal_mode_mismatch", `Could not set rollback journal mode (got ${journal})`);
     }
-    const applied: number[] = [];
-    let fromVersion = 0;
-    const migrate = db.transaction(() => {
-      db.run(
-        "CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL)",
-      );
-      fromVersion = readSchemaVersion(db);
-      if (fromVersion > SCHEMA_VERSION) {
-        throw new AgentbusError(
-          "schema_mismatch",
-          `Mailbox schema version ${fromVersion} is newer than this build (${SCHEMA_VERSION}); upgrade agentbus`,
-          EXIT.failure,
-          { found: fromVersion, supported: SCHEMA_VERSION },
-        );
-      }
-      for (const m of MIGRATIONS) {
-        if (m.version <= fromVersion) continue;
-        db.run(m.sql);
-        db.query("INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)").run(
-          m.version,
-          m.name,
-          nowIso(),
-        );
-        applied.push(m.version);
-      }
-    });
-    migrate.immediate();
-    const fk = db.query("PRAGMA foreign_key_check").all();
-    if (fk.length > 0)
-      throw failure("integrity_failed", "Foreign key check failed after migration", { rows: fk.length });
-    const integrity = db
-      .query<{ integrity_check: string }, []>("PRAGMA integrity_check")
-      .get()?.integrity_check;
-    if (integrity !== "ok") throw failure("integrity_failed", `Integrity check failed: ${integrity}`);
-    return { created, fromVersion, toVersion: SCHEMA_VERSION, applied, dbPath: paths.dbPath };
+    const result = db.transaction(() => migrateSchema(db)).immediate();
+    return { created, ...result, dbPath: paths.dbPath };
   } finally {
     db.close();
   }
+}
+
+/** Apply and verify migrations inside the caller's transaction (init or exclusive offline upgrade). */
+export function migrateSchema(db: Database): Omit<InitResult, "created" | "dbPath"> {
+  if (!db.inTransaction) throw new Error("Schema migration requires a transaction");
+  db.run(
+    "CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL)",
+  );
+  const fromVersion = readSchemaVersion(db);
+  if (fromVersion > SCHEMA_VERSION) {
+    throw new AgentbusError(
+      "schema_mismatch",
+      `Mailbox schema version ${fromVersion} is newer than this build (${SCHEMA_VERSION}); upgrade agentbus`,
+      EXIT.failure,
+      { found: fromVersion, supported: SCHEMA_VERSION },
+    );
+  }
+  const applied: number[] = [];
+  for (const m of MIGRATIONS) {
+    if (m.version <= fromVersion) continue;
+    db.run(m.sql);
+    db.query("INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)").run(
+      m.version,
+      m.name,
+      nowIso(),
+    );
+    applied.push(m.version);
+  }
+  const fk = db.query("PRAGMA foreign_key_check").all();
+  if (fk.length > 0)
+    throw failure("integrity_failed", "Foreign key check failed after migration", { rows: fk.length });
+  const integrity = db
+    .query<{ integrity_check: string }, []>("PRAGMA integrity_check")
+    .get()?.integrity_check;
+  if (integrity !== "ok") throw failure("integrity_failed", `Integrity check failed: ${integrity}`);
+  return { fromVersion, toVersion: SCHEMA_VERSION, applied };
 }
 
 /** Runs `fn` inside BEGIN IMMEDIATE so read-then-write checks and writes share one transaction. */

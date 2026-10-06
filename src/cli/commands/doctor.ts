@@ -1,11 +1,12 @@
 import { Database } from "bun:sqlite";
-import { readdirSync, readFileSync, statSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { readFileSync, statSync } from "node:fs";
+import { join } from "node:path";
 import type { Command } from "commander";
 import pc from "picocolors";
 import { hookStatus } from "../../adapters/claude/settings.ts";
 import { spoolCounts } from "../../adapters/claude/spool.ts";
-import { installedBinPath, type Resolved, resolvePaths, SOURCE_ENTRY } from "../../config/config.ts";
+import { buildInfo, executableBuildInfo, sourceFreshness } from "../../build-info.ts";
+import { installedBinPath, type Resolved, resolvePaths } from "../../config/config.ts";
 import { resolveCallerRef } from "../../services/caller.ts";
 import { returnPathResolver } from "../../services/returnpath.ts";
 import { readSchemaVersion, SCHEMA_VERSION } from "../../store/db.ts";
@@ -156,6 +157,12 @@ function runChecks(opts: { config?: string; stateDir?: string; as?: string }): C
     add("claude_hooks", "warn", (err as Error).message);
   }
 
+  const currentBuild = buildInfo();
+  add(
+    "build",
+    "ok",
+    `${currentBuild.commit ?? "unknown commit"}${currentBuild.dirty ? " (dirty)" : ""}; source ${currentBuild.sourceHash}; schema v${currentBuild.schemaVersion}; ${currentBuild.compiled ? "compiled" : "source"}`,
+  );
   const workerCli = paths.cliArgv ?? [paths.cliCommand];
   const external = workerCli.find((p) => p.startsWith("/Volumes/"));
   const installed = installedBinPath();
@@ -164,18 +171,48 @@ function runChecks(opts: { config?: string; stateDir?: string; as?: string }): C
       "worker_cli",
       "warn",
       `workers run ${external}, on an external volume`,
-      "background Claude sessions can be denied reads there; run `bun run install:bin` in the checkout",
+      "run `bun run upgrade` in the checkout",
     );
-  } else if (paths.cliArgv?.[0] === installed && fileExists(installed)) {
-    const stale = newestSourceMtime() > statSync(installed).mtimeMs;
+  } else if (paths.cliArgv?.length === 1) {
+    const binary = paths.cliArgv[0]!;
+    const identity =
+      currentBuild.compiled && realOrSelf(binary) === realOrSelf(process.execPath)
+        ? currentBuild
+        : executableBuildInfo(binary);
+    if (!identity) {
+      add(
+        "worker_cli",
+        "warn",
+        `workers run ${binary}; build identity unavailable`,
+        "run `bun run upgrade` to install an identifiable build",
+      );
+    } else {
+      // A source invocation compares against its own checkout; a standalone executable can inspect
+      // its recorded checkout when mounted, but remains usable when that checkout is unavailable.
+      const freshness = !currentBuild.compiled
+        ? identity.sourceHash === currentBuild.sourceHash
+          ? "current"
+          : "stale"
+        : sourceFreshness(identity);
+      const compatible = identity.schemaVersion === SCHEMA_VERSION;
+      add(
+        "worker_cli",
+        !compatible ? "fail" : freshness === "current" ? "ok" : "warn",
+        `workers run ${binary}; commit ${identity.commit ?? "unknown"}; source ${identity.sourceHash}; schema v${identity.schemaVersion}; checkout ${freshness}`,
+        !compatible || freshness === "stale"
+          ? "run `bun run upgrade` in the intended checkout"
+          : freshness === "unavailable"
+            ? "checkout unavailable; build identity is recorded, freshness cannot be checked"
+            : undefined,
+      );
+    }
+  } else {
     add(
       "worker_cli",
-      stale ? "warn" : "ok",
-      `workers run ${installed}`,
-      stale ? "the checkout changed since it was built; run `bun run install:bin` again" : undefined,
+      "warn",
+      `workers run ${paths.cliCommand}; custom/source command, compiled identity not verified`,
+      `the standard executable is ${installed}`,
     );
-  } else {
-    add("worker_cli", "ok", `workers run ${paths.cliCommand}`);
   }
 
   for (const [name, bin] of [
@@ -241,22 +278,6 @@ const STATUS_TAG: Record<Status, () => string> = {
   warn: () => pc.yellow("WARN"),
   fail: () => pc.red("FAIL"),
 };
-
-function newestSourceMtime(): number {
-  const root = dirname(SOURCE_ENTRY);
-  let newest = 0;
-  const walk = (dir: string) => {
-    for (const entry of readdirSync(dir, { withFileTypes: true })) {
-      const full = join(dir, entry.name);
-      if (entry.isDirectory()) walk(full);
-      else newest = Math.max(newest, statSync(full).mtimeMs);
-    }
-  };
-  try {
-    walk(root);
-  } catch {}
-  return newest;
-}
 
 function overallStatus(checks: Check[]): Status {
   if (checks.some((c) => c.status === "fail")) return "fail";

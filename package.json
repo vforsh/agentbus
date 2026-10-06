@@ -29,8 +29,11 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test:integration": "bun test --timeout 120000 tests/integration",
     "test:e2e": "bun test --timeout 120000 tests/e2e",
-    "gate": "bun run lint && bun run typecheck && bun run test:integration && bun run test:e2e",
-    "install:bin": "bun build --compile --minify src/main.ts --outfile \"${XDG_DATA_HOME:-$HOME/.local/share}/agentbus/bin/agentbus\""
+    "gate": "bun run lint && bun run typecheck && bun run test:integration && bun run test:e2e && bun run test:compiled",
+    "install:bin": "bun run upgrade",
+    "test:compiled": "bun test --timeout 120000 tests/release",
+    "release:check": "bun scripts/release.ts check",
+    "upgrade": "bun scripts/release.ts upgrade"
   },
   "dependencies": {
     "commander": "15.0.0",

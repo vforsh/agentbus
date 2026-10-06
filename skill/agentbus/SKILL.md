@@ -79,8 +79,9 @@ Your prompt carries an `<agentbus-contract version="1">` block. Follow it exactl
 
 ## Setup and diagnostics
 
-- Install the worker-facing executable on the internal disk once per change of the checkout: `bun run install:bin` in the agentbus checkout (background Claude sessions may be unable to read external volumes).
-- `agentbus doctor` — read-only readiness (store schema, spool backlog, hook installation and pinned store, provider CLIs, caller, and the caller's return path for its open delegations).
+- Install/upgrade the worker-facing executable from the checkout with `bun run upgrade` (`install:bin` is an alias). It builds and smoke-tests a compiled candidate, backs up/migrates the selected store and replaces the executable. Run offline: stop Agentbus users and watchers first; open delegations, live/unverified waits, queued hook events and newer schemas are refused. Only the selected store is checked. Do not close real work to bypass this gate. Background Claude sessions may be unable to read external volumes, so keep the executable on the internal disk.
+- `bun run gate` includes the compiled release checks; `bun run release:check` only builds and smoke-tests without installing or launching models. `agentbus build-info --json` reports embedded commit, source fingerprint and supported schema. Backups and interrupted-upgrade recovery are documented in README.md.
+- `agentbus doctor` — read-only readiness (build identity/source freshness, store schema, spool backlog, hook installation and pinned store, provider CLIs, caller, and the caller's return path for its open delegations).
 - Claude workers are observed through per-worker hooks: start them with `claude --bg --settings <claudeSettings>` from the `delegate` receipt. The same hooks ring the follow-up doorbell (`PostToolUse`, `Stop`). After a Desktop handoff only explicit replies and `--probe` remain. `agentbus hooks claude install|uninstall|status|print [--dry-run]` manages an optional user-level install that also covers handed-off sessions but runs in every Claude session.
 - `agentbus config set codexBin=/path claudeBin=/path`, `config get|unset|import|export|path|ls`.
 - `agentbus status [<session>] [--probe]`, `agentbus event drain`.
