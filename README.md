@@ -82,7 +82,7 @@ agentbus delegate --to codex --name executor --cwd ~/dev/project --key task-002 
 agentbus wait --replace --timeout 30m --probe 60s --json   # as a background command
 
 # Worker (follows the generated <agentbus-contract> block; <worker-bin> fixes store and --as)
-<worker-bin> read --correlation <request-id> --json
+<worker-bin> read --correlation <request-id>
 <worker-bin> ack <request-id>
 <worker-bin> reply <request-id> --type result --outcome success --key result-1 \
   --summary "Parser fixed; tests pass" --file result.md
@@ -91,7 +91,7 @@ agentbus wait --replace --timeout 30m --probe 60s --json   # as a background com
 agentbus followup executor --summary "Use the staging DB" --file followup.md
 
 # Parent, re-invoked by its wait
-agentbus read --json
+agentbus read
 agentbus ack <result-id>
 agentbus delegations
 agentbus explain executor     # timeline, why it is stuck, next steps; changes nothing
@@ -107,8 +107,9 @@ agentbus delegate --to <claude|codex> --file <path|-> [--name] [--cwd] [--allow-
 agentbus delegations [<request-id|name>...] [--all] [--global] [--probe]
 agentbus send <recipient> --file <path|-> [--type message|request] [--key] [--summary] [--dry-run]
 agentbus followup <request-id|name> --file <path|-> [--key] [--summary] [--dry-run]
-agentbus reply <message-id> --file <path|-> [--type message|progress|question|result] [--outcome] [--key] [--summary]
-agentbus read [--all] [--unseen] [--after <seq>] [--from] [--type] [--correlation] [--limit]
+agentbus reply <message-id> --file <path|-> [--type message|progress|question|result] [--outcome] [--key] [--summary] [--no-ack]
+agentbus show <message-id>
+agentbus read [--ack] [--all] [--unseen] [--after <seq>] [--from] [--type] [--correlation] [--limit]
 agentbus wait [--timeout 60s] [--settled] [--probe <interval>] [--replace] [--after] [--from] [--type] [--correlation] [--limit]
 agentbus ack <message-id...> | close <request-id|name>
 agentbus status [<session>] [--probe]
@@ -122,6 +123,12 @@ agentbus config|cfg list|ls|path|get|set|unset|import|export
 ```
 
 Global: `--as`, `--config`, `--state-dir`, `--json`, `--plain`, `-q`, `-v`, `--no-color`, `--no-input`, `--version`, `-h`.
+
+For agents and humans, `read` prints readable bodies; `show <id>` prints one full body, including acknowledged mail (sender or recipient only). Use `--json` for scripts. Replies acknowledge their source in the same transaction; `--no-ack` opts out. Failed replies and dry runs leave receipts unchanged. Keyed retries can acknowledge the source without sending another reply; opting out never reverses an existing acknowledgement or delegation settlement.
+
+Batch `ack <id>…` after handling results. `read --ack` accepts only the returned, filtered page and preserves pagination. It commits acknowledgement before printing, so use it only when accepting that batch: a lost stdout does not undo acceptance; recover its bodies with `read --all` or `show`.
+
+The companion `claude-threads` launcher provides `cleanup.sh cancel <name|request-id>` (stop the owner, close the delegation, keep the session). The `agentbus-threads` mod previews question/result bodies and supports opt-in `stop_when_settled`, which stops idle child owners after their result is acknowledged and background work has ended.
 
 ### Exit codes
 

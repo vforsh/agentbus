@@ -62,7 +62,7 @@ First release (milestones 1–4):
 1. Two independent processes can register sessions, exchange a request and reply, and acknowledge messages through the installed CLI.
 2. A committed message survives sender exit, reader interruption and a subsequent CLI process reopening the database.
 3. Repeating a send or delegation with the same sender and idempotency key returns the original IDs and contract, even after task closure; changing its intent produces a conflict. A retry does not launch a second worker.
-4. Reading or waiting does not acknowledge a message. `read`, including `--unseen`, never changes receipts. `wait` atomically marks its returned batch seen; every consumer also recovers unacknowledged mail after a lost output, restart or timeout, without a client-side cursor.
+4. Default reading or waiting does not acknowledge a message. `read`, including `--unseen`, leaves receipts unchanged unless `--ack` explicitly accepts the returned batch. `reply` acknowledges its source atomically unless `--no-ack`. `wait` atomically marks its returned batch seen; every consumer also recovers unacknowledged mail after a lost output, restart or timeout, without a client-side cursor.
 5. Observed permission requests, turn failures, interruptions, tracking loss and normal turn ends produce distinct notices. Repeated permission requests in one prompt are preserved. Finishing a turn never means the task succeeded; only a worker-authored `result` carries an outcome. The support matrix names provider prompt types the selected hooks do not cover.
 6. With a writable compatible store, a delegated Claude turn's final response reaches the parent's inbox through the worker's per-worker hook alone while its background owner runs it (after a Desktop handoff only with the optional user-level install), unless an explicit question/result already replaces that finish notice. Otherwise an eligible captured event is spooled and later drained, or an observation gap is surfaced when diagnosable; successful spooling is not yet inbox delivery.
 7. When a delegated `codex exec` run finishes or fails, the parent's inbox contains Codex's final message or the failure, reported by the runner.
@@ -190,6 +190,7 @@ Each recipient message moves through three states: **unseen**, **seen** and **ac
 - `wait` returns unseen, unacknowledged messages matching its filters and marks them seen in the same transaction that selects them, then prints them. A re-armed wait therefore returns only unseen work, without a client-side cursor. The recovery loop below handles the gap between committing seen state and delivering stdout.
 - `read` returns unacknowledged messages by default without changing receipts. `read --unseen` is also non-mutating and filters to unseen, unacknowledged messages. `--all` is history mode, incompatible with `--unseen`.
 - `ack` means the receiving workflow accepted responsibility; it also sets `seenAt` if needed so an acknowledged message cannot wake a waiter.
+- `reply` acknowledges the source in the same transaction unless `--no-ack`; validation failures leave it pending. A keyed retry may acknowledge its source without duplicating the reply. `read --ack` explicitly accepts only its selected page before stdout; lost output does not undo acceptance, so its bodies are recovered with `show` or `read --all`.
 
 Seen is a delivery hint, not consumption. There is an unavoidable commit-to-stdout gap: a killed waiter may mark a message seen without delivering its output. Every workflow runs a paginated `read` recovery sweep at startup and on **every** wake, including timeout, before processing new wait output or re-arming. Heartbeats do this even when `wait` returns no messages. A seen-but-unacknowledged message may be handled again; side effects need their own stable retry keys. A deliberately deferred question can be acknowledged after its pending action is recorded durably in the delegation workflow; acknowledgement itself neither answers it nor clears its phase.
 
@@ -315,8 +316,9 @@ agentbus delegate --to <claude|codex> --file <path|-> [--name <name>] [--key <ke
 agentbus delegations [<request-id|name>...] [--all] [--probe]
 agentbus send <recipient> --file <path|->
 agentbus followup <request-id|name> --file <path|->
-agentbus reply <message-id> --file <path|->
-agentbus read [--all] [--unseen] [--after <seq>] [--from <addr>] [--type <type>] [--correlation <id>] [--limit <n>]
+agentbus reply <message-id> --file <path|-> [--no-ack]
+agentbus show <message-id>
+agentbus read [--ack] [--all] [--unseen] [--after <seq>] [--from <addr>] [--type <type>] [--correlation <id>] [--limit <n>]
 agentbus wait [--timeout <duration>] [--settled] [--probe <interval>] [--after <seq>] [--from <addr>] [--type <type>] [--correlation <id>] [--limit <n>]
 agentbus ack <message-id...>
 agentbus close <request-id|name>
@@ -348,8 +350,9 @@ Milestone 6 adds `send --wake`, `wake <session> --message <id>` and `worker run|
 | `delegations` | Caller's delegations as a parent: worker name, provider, labels, phase, outcome, latest summary, age and pending question. Default: open ones plus those closed in the last 24 hours; `--all` for history. Targets show one delegation in detail. `--probe` adds live activity, plus Claude job `detail` and `needs` read from `~/.claude/jobs/<short-id>/state.json`. |
 | `send` | Require `--file`; optional `--type message\|request`, `--key` and `--summary`. Default type `message`. A `request` opens a delegation. A parent's message to the worker of its open delegation joins it (`joined: <request>`); otherwise it is an ordinary message, with a warning when the latest delegation to that worker has ended. |
 | `followup` | Parent sends a message into one of its delegations, selected by request ID or unambiguous worker name; same body, summary, key and dry-run flags as `send`. Keyed retries return the original receipt; otherwise refused with `delegation_closed` (exit 5) once the delegation has ended. |
-| `reply` | Body, summary and retry flags as above; `--type message\|progress\|question\|result` and `--outcome` (required only for result). Derive destination and correlation and enforce the role rules. |
-| `read` | Default: caller's unacknowledged inbox in ascending sequence, limit 50; no receipt changes. `--unseen` filters to unseen messages; `--all` includes acknowledged history. Filters combine. Returns `cursor` and `hasMore`. |
+| `reply` | Body, summary and retry flags as above; `--type message\|progress\|question\|result` and `--outcome` (required only for result). Derive destination and correlation and enforce the role rules. Acknowledge the source in the reply transaction unless `--no-ack`; failures never consume it, keyed retries acknowledge without duplicating the reply. Success-result gates run before acknowledgement. |
+| `show` | Sender or recipient prints one complete message body, including acknowledged history; no receipt changes. `--json` returns its envelope. |
+| `read` | Default: caller's unacknowledged inbox in ascending sequence, limit 50; no receipt changes. `--unseen` filters to unseen messages; `--all` includes acknowledged history. Filters combine. Returns `cursor` and `hasMore`. Opt-in `--ack` selects and acknowledges only that page atomically before stdout, returning updated receipts; acceptance survives lost output, recoverable via `show` or `--all`. |
 | `wait` | Return unseen, unacknowledged matching messages and atomically mark that batch seen; otherwise poll until timeout. `--probe <interval>` runs liveness probes for the caller's open delegations. `--settled` follows the batch rules below. No `--all` or `--unseen`; never acknowledges. |
 | `ack` | Mark the caller's selected messages accepted; repeated acknowledgement is a success. |
 | `close` | Parent closes an open delegation without a result, for an abandoned, lost or removed worker. |
@@ -587,7 +590,7 @@ agentbus --as <worker-id> reply <request-id> --type result --outcome success \
   --file "$handoff_dir/result.md" --json
 
 # Codex heartbeat wake (static prompt; paginate and recover even after an empty wait)
-agentbus read --json
+agentbus read
 # inspect/handle the pending messages; use --after only within this recovery sweep
 agentbus ack <result-message-id> --json
 ```
@@ -611,7 +614,7 @@ Both config.json and config.local.json define `port`. Which one should win?
 EOF
 
 # Claude parent, re-invoked by the wait or timeout: recover, answer, guarded resume, re-arm
-agentbus read --json
+agentbus read
 agentbus reply <question-id> --key answer-<question-id> --file "$run_dir/answer.md" --json   # -> <answer-id>
 ~/.claude/skills/claude-to-codex/scripts/spawn.sh --resume <thread-id> \
   -f "$run_dir/followup.md" -C /Users/example/dev/project           # followup names <answer-id>
@@ -749,6 +752,7 @@ Use real subprocesses and temporary state directories for mailbox integration ch
 | Return-path capability | Missing automation/background capability leaves mail stored and reports unready/manual delivery; existing heartbeat is reused and cleaned up after the last delegation |
 | Return-path readiness | A reported binding without a watcher is not ready; timeout, kill, interruption, supersession and an exited owner each read as not armed with their reason; unverifiable arms and a failing `ps` stay unknown; children opened after the watcher share its readiness; coverage follows the wait's filters; heartbeat check-ins turn stale after their window |
 | Completion gate | Follow-up before result, result before follow-up, seen-but-unacknowledged follow-ups, answers, keyed retries and concurrent follow-up/result races: a follow-up is handled or visibly refused, never silently settled by `success` |
+| Lead ergonomics | Sender/recipient-only full-body show without receipt changes; reply acknowledgement, opt-out, keyed retry, failure rollback and success-gate preservation; read-and-ack only the filtered returned page with stable pagination. Companion launcher/mod subprocess checks cover bounded wake bodies, stop-and-close cancellation, acknowledged-result cleanup and process ownership rules. |
 | Explain | Pending launch, working, question, answered-not-resumed, permission, interruption, tracking loss, missing/dead parent watcher, queued events and completed work each yield their evidence and next action; output omits bodies, truncation is explicit, and the store is unchanged afterwards |
 | Store routing | Non-default config/state paths reach workers and hooks; fixtures cannot accidentally write the real mailbox |
 | File/stdin input | Quotes, shell syntax, Cyrillic and long text arrive unchanged |

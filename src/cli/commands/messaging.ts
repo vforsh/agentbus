@@ -1,7 +1,7 @@
 import type { Command } from "commander";
 import pc from "picocolors";
 import { drainSpool, spoolCounts } from "../../adapters/claude/spool.ts";
-import { EXIT, usageError } from "../../errors.ts";
+import { conflict, EXIT, notFound, usageError } from "../../errors.ts";
 import {
   BODY_LIMIT,
   DEFAULT_LIMIT,
@@ -26,9 +26,16 @@ import {
 import { derivePhase } from "../../services/phase.ts";
 import { returnPathResolver } from "../../services/returnpath.ts";
 import { runWait, type WaitResult } from "../../services/wait.ts";
-import type { Db } from "../../store/db.ts";
+import { type Db, tx } from "../../store/db.ts";
 import { getDelegation, latestDelegationBetween } from "../../store/delegations.ts";
-import { selectInbox } from "../../store/messages.ts";
+import {
+  acknowledge,
+  type Batch,
+  getMessage,
+  type InboxFilter,
+  selectInbox,
+  toEnvelope,
+} from "../../store/messages.ts";
 import { endWaitArm } from "../../store/observations.ts";
 import { requireAddress } from "../../store/sessions.ts";
 import { newId, parseDuration } from "../../util/misc.ts";
@@ -91,6 +98,18 @@ function waitHuman(db: Db, result: WaitResult): string {
   }
   parts.push(messagesHuman(db, result.rows));
   return parts.join("\n");
+}
+
+function readBatch(db: Db, filters: InboxFilter, ack: boolean): Batch {
+  if (!ack) return selectInbox(db, filters);
+  return tx(db, () => {
+    const batch = selectInbox(db, filters);
+    acknowledge(
+      db,
+      batch.rows.map((m) => m.id),
+    );
+    return { ...batch, rows: batch.rows.map((m) => getMessage(db, m.id)!) };
+  });
 }
 
 export function registerMessaging(program: Command): void {
@@ -220,10 +239,11 @@ export function registerMessaging(program: Command): void {
 
   program
     .command("reply <message-id>")
-    .description("Reply to a message; recipient and correlation are derived from it")
+    .description("Reply and acknowledge the source message; recipient and correlation are derived from it")
     .option("--file <path|->", "body file, or - for stdin")
     .option("--type <type>", "message, progress, question or result", "message")
     .option("--outcome <outcome>", "success, blocked, failed or unknown (results only)")
+    .option("--no-ack", "leave the source message unacknowledged")
     .option("--key <key>", "idempotency key, unique per sender")
     .option("--summary <text>", "one-line summary (at most 200 characters)")
     .option("--dry-run", "validate and describe without writing")
@@ -239,6 +259,7 @@ export function registerMessaging(program: Command): void {
             key?: string;
             summary?: string;
             dryRun?: boolean;
+            ack?: boolean;
           },
         ) => {
           if (opts.type === "request")
@@ -272,6 +293,7 @@ export function registerMessaging(program: Command): void {
             body,
             summary,
             key,
+            ack: opts.ack,
           });
           const data = {
             messageId: r.message.id,
@@ -284,6 +306,7 @@ export function registerMessaging(program: Command): void {
             attribution: r.attribution,
             delegation: delegationSummary(db, r.delegation?.request_id ?? null),
             unhandledFollowUps: r.unhandledFollowUps,
+            acknowledged: r.acknowledged,
           };
           if (r.attribution === "unavailable")
             ctx.warn("no bound turn found for this reply; finish notices for the turn are not suppressed");
@@ -302,8 +325,29 @@ export function registerMessaging(program: Command): void {
     );
 
   program
+    .command("show <message-id>")
+    .description("Print one message's full body; never changes receipts")
+    .action(
+      action((ctx, messageId: string) => {
+        const db = ctx.db();
+        const caller = requireCaller(db, ctx.opts.as);
+        drainBeforeRead(ctx, db);
+        const message = getMessage(db, messageId);
+        if (!message) throw notFound("message_not_found", `No message ${messageId}`, { messageId });
+        if (message.to_id !== caller.session.id && message.from_id !== caller.session.id)
+          throw conflict("not_participant", "Only the sender or recipient can show a message", { messageId });
+        ctx.emit(
+          { message: toEnvelope(message) },
+          () => message.body,
+          () => message.body,
+        );
+      }),
+    );
+
+  program
     .command("read")
-    .description("Read the caller's unacknowledged inbox; never changes receipts")
+    .description("Read the caller's unacknowledged inbox; --ack accepts the returned batch")
+    .option("--ack", "acknowledge only the messages returned by this read (after committing, before output)")
     .option("--all", "history mode: include acknowledged messages")
     .option("--unseen", "only unseen messages")
     .option("--after <seq>", "only messages after this sequence")
@@ -317,6 +361,7 @@ export function registerMessaging(program: Command): void {
           ctx,
           opts: {
             all?: boolean;
+            ack?: boolean;
             unseen?: boolean;
             after?: string;
             from?: string;
@@ -330,7 +375,7 @@ export function registerMessaging(program: Command): void {
           const caller = requireCaller(db, ctx.opts.as);
           const spool = drainBeforeRead(ctx, db);
           const after = parseSequence(opts.after, "--after");
-          const batch = selectInbox(db, {
+          const filters = {
             recipientId: caller.session.id,
             includeAcknowledged: !!opts.all,
             unseenOnly: !!opts.unseen,
@@ -339,10 +384,17 @@ export function registerMessaging(program: Command): void {
             type: parseType(opts.type),
             correlationIds: opts.correlation ? [opts.correlation] : null,
             limit: parseLimit(opts.limit, DEFAULT_LIMIT, MAX_LIMIT),
-          });
+          };
+          const batch = readBatch(db, filters, !!opts.ack);
           const cursor = batch.rows.length > 0 ? batch.rows[batch.rows.length - 1]!.sequence : after;
           ctx.emit(
-            { messages: envelopes(batch.rows), cursor, hasMore: batch.hasMore, ...(spool ? { spool } : {}) },
+            {
+              messages: envelopes(batch.rows),
+              cursor,
+              hasMore: batch.hasMore,
+              ...(opts.ack ? { acknowledged: batch.rows.map((m) => m.id) } : {}),
+              ...(spool ? { spool } : {}),
+            },
             () =>
               messagesHuman(db, batch.rows) +
               (batch.hasMore ? `\n\n${pc.yellow(`More messages available: --after ${cursor}`)}` : ""),

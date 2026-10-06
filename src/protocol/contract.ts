@@ -85,7 +85,7 @@ export function renderContract(c: ContractInput): string {
     `  ${workerCommand(c)}`,
     "",
     "1. Read the request and acknowledge it:",
-    `     ${ab} read --correlation ${c.requestId} --json`,
+    `     ${ab} read --correlation ${c.requestId}`,
     `     ${ab} ack ${c.requestId}`,
     "2. Optional progress, only at real milestones:",
     `     ${ab} reply ${c.requestId} --type progress --summary "<one line>" --file - <<'EOF'`,

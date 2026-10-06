@@ -238,6 +238,7 @@ export interface ReplyInput {
   body: string;
   summary: string | null;
   key: string | null;
+  ack?: boolean;
 }
 
 export interface ReplyReceipt {
@@ -248,6 +249,7 @@ export interface ReplyReceipt {
   attribution: "turn" | "unavailable" | "not_applicable";
   /** Parent follow-ups a non-success result settled without the worker acknowledging them. */
   unhandledFollowUps: string[];
+  acknowledged: string[];
 }
 
 /** Task replies are attributed to a bound turn when one was active; other replies have no turn. */
@@ -278,6 +280,12 @@ export function replyMessage(db: Db, caller: SessionRow, input: ReplyInput): Rep
     const original = getMessage(db, input.messageId);
     if (!original)
       throw notFound("message_not_found", `No message ${input.messageId}`, { messageId: input.messageId });
+    if (original.to_id !== caller.id) {
+      throw conflict("not_recipient", "Only the original recipient can reply to a message", {
+        messageId: original.id,
+      });
+    }
+    const acknowledged = input.ack !== false ? [original.id] : [];
     const intent = {
       kind: "reply",
       to: original.from_id,
@@ -294,6 +302,7 @@ export function replyMessage(db: Db, caller: SessionRow, input: ReplyInput): Rep
       if (existing) {
         if (existing.intent_hash !== hash) throw conflictOnKey(input.key, existing);
         const d = getDelegation(db, existing.correlation_id);
+        if (acknowledged.length > 0) acknowledge(db, acknowledged);
         return {
           message: existing,
           duplicate: true,
@@ -302,13 +311,9 @@ export function replyMessage(db: Db, caller: SessionRow, input: ReplyInput): Rep
           attribution: attributionOf(existing),
           unhandledFollowUps:
             existing.type === "result" && d ? followUpCounts(parentMail(db, d)).unhandledIds : [],
+          acknowledged,
         };
       }
-    }
-    if (original.to_id !== caller.id) {
-      throw conflict("not_recipient", "Only the original recipient can reply to a message", {
-        messageId: original.id,
-      });
     }
     if (original.type === "notice" || original.from_id === SYSTEM_OBSERVER_ID) {
       throw usageError("Notices cannot be replied to; the delegation identifies their worker");
@@ -395,6 +400,9 @@ export function replyMessage(db: Db, caller: SessionRow, input: ReplyInput): Rep
       notice: null,
       turnRef,
     });
+    // Keep acceptance and reply in one commit. Failed validation above never consumes the source mail.
+    // The success gate deliberately runs first: replying to a follow-up cannot bypass handling it.
+    if (acknowledged.length > 0) acknowledge(db, acknowledged);
     let closed = false;
     if (input.type === "result" && delegation) {
       closed = closeDelegation(db, delegation.request_id, "done", input.outcome, message.id);
@@ -411,6 +419,7 @@ export function replyMessage(db: Db, caller: SessionRow, input: ReplyInput): Rep
       closedDelegation: closed,
       attribution: attributionOf(message),
       unhandledFollowUps,
+      acknowledged,
     };
   });
 }
