@@ -4,6 +4,7 @@ import { z } from "zod";
 import { inputError, notFound, usageError } from "../../errors.ts";
 import { PROVIDERS, type Provider } from "../../protocol/types.ts";
 import { resolveCallerRef } from "../../services/caller.ts";
+import { returnReadiness } from "../../services/returnpath.ts";
 import { type InitResult, initStore, tx } from "../../store/db.ts";
 import {
   bindSession,
@@ -16,7 +17,7 @@ import {
   toSession,
   validateExternalId,
 } from "../../store/sessions.ts";
-import { canonicalDir, nowIso } from "../../util/misc.ts";
+import { canonicalDir, nowIso, parseDuration } from "../../util/misc.ts";
 import { action } from "../action.ts";
 import { collect, readBody } from "../context.ts";
 import { sessionLine } from "../render.ts";
@@ -27,6 +28,17 @@ const ReturnBindingSchema = z
     status: z.enum(["setup_required", "ready", "unsupported"]),
     handle: z.string().max(500).nullable().optional(),
     checkedAt: z.iso.datetime().optional(),
+    /** Heartbeat cadence such as "5m"; a check-in stays fresh for three intervals (default 15m). */
+    interval: z
+      .string()
+      .refine((v) => {
+        try {
+          return parseDuration(v, "interval") > 0;
+        } catch {
+          return false;
+        }
+      }, "interval must be a duration such as 5m")
+      .optional(),
     reason: z.string().max(1000).optional(),
   })
   .strict();
@@ -239,14 +251,25 @@ export function registerSessionCommands(program: Command): void {
     .option("--name <name>", "display name")
     .option("--label <k=v>", "set a label (repeatable)", collect, [])
     .option("--unset-label <key>", "remove a label (repeatable)", collect, [])
-    .option("--binding-file <path>", "return binding JSON: {strategy, status, handle?, checkedAt?, reason?}")
+    .option(
+      "--binding-file <path|->",
+      "return binding JSON: {strategy, status, handle?, checkedAt?, interval?, reason?}",
+    )
+    .option("--refresh", "record a fresh check-in of the existing return binding (each heartbeat run)")
     .action(
       action(
         async (
           ctx,
           target: string,
-          opts: { name?: string; label: string[]; unsetLabel: string[]; bindingFile?: string },
+          opts: {
+            name?: string;
+            label: string[];
+            unsetLabel: string[];
+            bindingFile?: string;
+            refresh?: boolean;
+          },
         ) => {
+          if (opts.refresh && opts.bindingFile) throw usageError("Pass either --binding-file or --refresh");
           let returnBinding: z.infer<typeof ReturnBindingSchema> | undefined;
           if (opts.bindingFile) {
             const parsed = ReturnBindingSchema.safeParse(
@@ -262,6 +285,14 @@ export function registerSessionCommands(program: Command): void {
             if (s.provider === "system") throw usageError("The system observer cannot be updated");
             const labels = parseLabels(opts.label, JSON.parse(s.labels));
             for (const k of opts.unsetLabel) delete labels[k];
+            if (opts.refresh) {
+              if (!s.return_binding)
+                throw notFound(
+                  "return_binding_not_found",
+                  "No return binding to refresh; record one with --binding-file",
+                );
+              returnBinding = { ...JSON.parse(s.return_binding), checkedAt: nowIso() };
+            }
             db.query(
               "UPDATE sessions SET name = ?, labels = ?, return_binding = ?, updated_at = ? WHERE id = ?",
             ).run(
@@ -271,19 +302,21 @@ export function registerSessionCommands(program: Command): void {
               nowIso(),
               s.id,
             );
-            if (returnBinding) {
-              db.query(
-                "UPDATE delegations SET return_path_status = ?, return_path_reason = ? WHERE parent_id = ? AND state = 'open' AND return_path = ?",
-              ).run(returnBinding.status, returnBinding.reason ?? null, s.id, returnBinding.strategy);
-            }
+            // Readiness is derived from this report and from live watchers when read (services/returnpath.ts);
+            // delegation rows keep the status proposed when they opened.
             const updated = getSession(db, s.id);
             if (!updated) throw notFound("session_not_found", "Session disappeared during update");
             return updated;
           });
           const s = toSession(row);
+          // As a parent: what a delegation opened now would report, from the evidence just recorded.
+          const readiness = returnBinding ? returnReadiness(db, s.id, null) : null;
           ctx.emit(
-            { session: s },
-            () => `Updated ${s.id}`,
+            { session: s, ...(readiness ? { returnReadiness: readiness } : {}) },
+            () =>
+              readiness
+                ? `Updated ${s.id}\nreturn  ${readiness.strategy} — ${readiness.status} (${readiness.readiness}): ${readiness.reason}`
+                : `Updated ${s.id}`,
             () => sessionLine(s),
           );
         },

@@ -48,7 +48,12 @@ export function parseDuration(text: string, flag: string): number {
 
 export function formatAge(fromIso: string | null | undefined, now = Date.now()): string {
   if (!fromIso) return "-";
-  const ms = Math.max(0, now - Date.parse(fromIso));
+  return formatMs(now - Date.parse(fromIso));
+}
+
+/** Compact duration: 45s, 12m, 5h, 3d. */
+export function formatMs(duration: number): string {
+  const ms = Math.max(0, duration);
   const s = Math.floor(ms / 1000);
   if (s < 60) return `${s}s`;
   const m = Math.floor(s / 60);

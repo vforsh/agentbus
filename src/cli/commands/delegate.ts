@@ -7,8 +7,9 @@ import { requireCaller } from "../../services/caller.ts";
 import { delegate, findDelegation, proposeReturnPath, selectDelegation } from "../../services/mailbox.ts";
 import { derivePhase } from "../../services/phase.ts";
 import { probeDelegations } from "../../services/probe.ts";
+import { returnPathResolver } from "../../services/returnpath.ts";
 import { delegationsForParent } from "../../store/delegations.ts";
-import { parseLabels } from "../../store/sessions.ts";
+import { getSession, parseLabels } from "../../store/sessions.ts";
 import { writeFileAtomic } from "../../util/fsx.ts";
 import { canonicalDir, newId } from "../../util/misc.ts";
 import { action } from "../action.ts";
@@ -96,6 +97,8 @@ export function registerDelegate(program: Command): void {
             labels,
           });
           const phase = derivePhase(db, r.delegation);
+          // Current evidence, not the creation-time proposal: a watcher armed earlier covers this one too.
+          const rp = returnPathResolver(db)(caller.session, r.delegation);
           const data = {
             workerId: r.worker.id,
             requestId: r.request.id,
@@ -103,8 +106,11 @@ export function registerDelegate(program: Command): void {
             duplicate: r.duplicate,
             delegation: { phase: phase.phase, state: r.delegation.state },
             returnPath: r.delegation.return_path,
-            returnPathStatus: r.delegation.return_path_status,
-            returnPathReason: r.delegation.return_path_reason,
+            returnPathStatus: rp.status,
+            // Evidence explains itself; without any, the creation-time proposal says what to set up.
+            returnPathReason:
+              rp.source === "none" ? (r.delegation.return_path_reason ?? rp.reason) : rp.reason,
+            returnReadiness: rp,
             contractVersion: r.delegation.contract_version,
             contract: r.delegation.contract,
             contractOut: opts.contractOut ?? null,
@@ -139,7 +145,7 @@ export function registerDelegate(program: Command): void {
           ctx.emit(
             data,
             () =>
-              `${r.duplicate ? "Recovered" : "Opened"} delegation ${r.request.id}\nworker  ${r.worker.id} (${provider}, pending)\nreturn  ${r.delegation.return_path} — ${r.delegation.return_path_status}`,
+              `${r.duplicate ? "Recovered" : "Opened"} delegation ${r.request.id}\nworker  ${r.worker.id} (${provider}, pending)\nreturn  ${r.delegation.return_path} — ${rp.status} (${rp.readiness}): ${rp.reason}`,
             () => [r.worker.id, r.request.id, String(r.duplicate)].join("\t"),
           );
         },
@@ -170,8 +176,10 @@ export function registerDelegate(program: Command): void {
         const probes = opts.probe
           ? probeDelegations(db, ctx.paths, rows, { deadline: Date.now() + 15_000, diagnostics: true })
           : [];
+        const readiness = returnPathResolver(db);
         const views = rows.map((d) => {
-          const v = delegationView(db, d, derivePhase(db, d));
+          const parent = getSession(db, d.parent_id)!;
+          const v = delegationView(db, d, derivePhase(db, d), readiness(parent, d));
           const p = probes.find((x) => x.requestId === d.request_id);
           return p ? { ...v, probe: p } : v;
         });

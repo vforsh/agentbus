@@ -213,6 +213,9 @@ export function observationsForSession(db: Db, sessionId: string, limit: number)
     .all(sessionId, limit);
 }
 
+/** What a wait delivers: everything, one request, a --settled snapshot, or a --from/--type subset. */
+export type WaitScope = "all" | "correlation" | "settled" | "filtered";
+
 export interface WaitArmRow {
   id: string;
   session_id: string;
@@ -222,17 +225,75 @@ export interface WaitArmRow {
   created_at: string;
   ended_at: string | null;
   end_reason: string | null;
+  /** NULL for arms recorded before migration 6: coverage and owner unknown. */
+  scope: WaitScope | null;
+  /** JSON ProcessIdentity of the wait process. */
+  process: string | null;
+  /** JSON ProcessIdentity[] of its nearest ancestors when armed. */
+  owner: string | null;
+  expires_at: string | null;
 }
 
-export function insertWaitArm(
-  db: Db,
-  arm: { sessionId: string; delegationId: string | null; turnRef: string | null; correlation: string | null },
-): WaitArmRow {
+export interface InsertWaitArm {
+  sessionId: string;
+  delegationId: string | null;
+  turnRef: string | null;
+  correlation: string | null;
+  scope: WaitScope;
+  process: unknown;
+  owner: unknown;
+  expiresAt: string;
+}
+
+export function insertWaitArm(db: Db, arm: InsertWaitArm): WaitArmRow {
   const id = newId();
   db.query(
-    "INSERT INTO wait_arms (id, session_id, delegation_id, turn_ref, correlation, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-  ).run(id, arm.sessionId, arm.delegationId, arm.turnRef, arm.correlation, nowIso());
+    `INSERT INTO wait_arms (id, session_id, delegation_id, turn_ref, correlation, created_at, scope, process, owner,
+       expires_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    id,
+    arm.sessionId,
+    arm.delegationId,
+    arm.turnRef,
+    arm.correlation,
+    nowIso(),
+    arm.scope,
+    arm.process ? JSON.stringify(arm.process) : null,
+    arm.owner ? JSON.stringify(arm.owner) : null,
+    arm.expiresAt,
+  );
   return db.query<WaitArmRow, [string]>("SELECT * FROM wait_arms WHERE id = ?").get(id)!;
+}
+
+/** Unended arms of a session, newest first. */
+export function openWaitArms(db: Db, sessionId: string): WaitArmRow[] {
+  return db
+    .query<WaitArmRow, [string]>(
+      "SELECT * FROM wait_arms WHERE session_id = ? AND ended_at IS NULL ORDER BY created_at DESC, rowid DESC",
+    )
+    .all(sessionId);
+}
+
+/** The session's most recent arms, newest first. */
+export function recentWaitArms(db: Db, sessionId: string, limit: number): WaitArmRow[] {
+  return db
+    .query<WaitArmRow, [string, number]>(
+      "SELECT * FROM wait_arms WHERE session_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ?",
+    )
+    .all(sessionId, limit);
+}
+
+/** Arms of a session created or ended within [from, to], or still running across `from`, oldest first. */
+export function waitArmsBetween(db: Db, sessionId: string, fromIso: string, toIso: string): WaitArmRow[] {
+  return db
+    .query<WaitArmRow, [Record<string, string>]>(
+      `SELECT * FROM wait_arms WHERE session_id = $session
+         AND ((created_at BETWEEN $from AND $to) OR (ended_at BETWEEN $from AND $to)
+           OR (created_at < $from AND (ended_at IS NULL OR ended_at > $from)))
+       ORDER BY created_at, rowid`,
+    )
+    .all({ session: sessionId, from: fromIso, to: toIso });
 }
 
 export function getWaitArm(db: Db, id: string): WaitArmRow | null {
@@ -254,4 +315,25 @@ export function endWaitArm(db: Db, id: string, reason: string): void {
     reason,
     id,
   );
+}
+
+/**
+ * Evidence about one delegation, oldest first: observations attributed to it, plus its worker's
+ * session-level observations (owner starts and releases, unattributed prompts) from `fromIso` until `toIso`.
+ */
+export function observationsForDelegation(
+  db: Db,
+  delegationId: string,
+  workerId: string,
+  fromIso: string,
+  toIso: string,
+): ObservationRow[] {
+  return db
+    .query<ObservationRow, [string, string, string, string]>(
+      `SELECT * FROM observations
+        WHERE delegation_id = ?
+           OR (session_id = ? AND delegation_id IS NULL AND captured_at >= ? AND captured_at < ?)
+        ORDER BY captured_at, rowid`,
+    )
+    .all(delegationId, workerId, fromIso, toIso);
 }

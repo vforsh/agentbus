@@ -1,4 +1,5 @@
 import { drainSpool, listSpool } from "../adapters/claude/spool.ts";
+import { lineage } from "../adapters/process.ts";
 import type { Resolved } from "../config/config.ts";
 import { ATTENTION_NOTICES, type MessageType, type Phase } from "../protocol/types.ts";
 import { type Db, dataVersion, tx } from "../store/db.ts";
@@ -11,6 +12,7 @@ import {
   insertWaitArm,
   supersedeWaitArms,
   type WaitArmRow,
+  type WaitScope,
 } from "../store/observations.ts";
 import { displayName, getSession, type SessionRow } from "../store/sessions.ts";
 import { sleep } from "../util/misc.ts";
@@ -69,13 +71,22 @@ function originOf(arm: WaitArmRow): WaitOrigin {
   };
 }
 
-/** Records the wait's origin when armed: the caller's current bound turn, if it is a worker in one. */
-function arm(
-  db: Db,
-  caller: SessionRow,
-  correlation: string | null,
-  replace: boolean,
-): { arm: WaitArmRow; replaced: number } {
+/** Ancestors recorded as the wait's owner: enough to reach the session process that runs the command. */
+const OWNER_DEPTH = 3;
+
+function scopeOf(opts: WaitOptions): WaitScope {
+  if (opts.settled) return "settled";
+  // --after only narrows by sequence; later mail always has a higher one, so it does not reduce coverage.
+  if (opts.fromId || opts.type) return "filtered";
+  return opts.correlation ? "correlation" : "all";
+}
+
+/**
+ * Records the wait's origin when armed (the caller's current bound turn, if it is a worker in one) and the
+ * evidence the parent's return-path readiness is derived from: coverage, process and owner identity, expiry.
+ */
+function arm(db: Db, caller: SessionRow, opts: WaitOptions): { arm: WaitArmRow; replaced: number } {
+  const identity = lineage(process.pid, OWNER_DEPTH);
   return tx(db, () => {
     const me = getSession(db, caller.id)!;
     const turn = activeTurnForSession(db, me.id, me.generation);
@@ -83,9 +94,13 @@ function arm(
       sessionId: me.id,
       delegationId: turn?.delegation_id ?? null,
       turnRef: turn?.id ?? null,
-      correlation,
+      correlation: opts.correlation,
+      scope: scopeOf(opts),
+      process: identity?.self ?? null,
+      owner: identity?.ancestors ?? null,
+      expiresAt: new Date(Date.now() + opts.timeoutMs).toISOString(),
     });
-    return { arm: row, replaced: replace ? supersedeWaitArms(db, me.id, row.id) : 0 };
+    return { arm: row, replaced: opts.replace ? supersedeWaitArms(db, me.id, row.id) : 0 };
   });
 }
 
@@ -117,7 +132,7 @@ export async function runWait(
 ): Promise<WaitResult> {
   const deadline = Date.now() + opts.timeoutMs;
   drainSpool(db, paths);
-  const { arm: armRow, replaced } = arm(db, caller, opts.correlation, opts.replace);
+  const { arm: armRow, replaced } = arm(db, caller, opts);
   hooks.setArm?.(armRow.id);
   const origin = originOf(armRow);
 

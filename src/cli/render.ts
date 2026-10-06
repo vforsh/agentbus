@@ -2,8 +2,10 @@
 
 import pc from "picocolors";
 import type { Envelope } from "../protocol/types.ts";
+import { type FollowUpCounts, followUpCounts, parentMail } from "../services/followups.ts";
 import { type Handoff, handoffReadiness } from "../services/handoff.ts";
 import type { PhaseInfo } from "../services/phase.ts";
+import type { ReturnReadiness } from "../services/returnpath.ts";
 import type { Db } from "../store/db.ts";
 import type { DelegationRow } from "../store/delegations.ts";
 import { type MessageRow, toEnvelope } from "../store/messages.ts";
@@ -96,12 +98,16 @@ export interface DelegationView {
   openedAt: string;
   closedAt: string | null;
   returnPath: string;
+  /** Current status, derived from live evidence (see returnReadiness). */
   returnPathStatus: string;
+  returnReadiness: ReturnReadiness;
+  /** Parent follow-ups and answers to the worker: pending ones block a success result. */
+  followUps: FollowUpCounts;
   handoff: Handoff;
   probe?: unknown;
 }
 
-export function delegationView(db: Db, d: DelegationRow, p: PhaseInfo): DelegationView {
+export function delegationView(db: Db, d: DelegationRow, p: PhaseInfo, rp: ReturnReadiness): DelegationView {
   const w = getSession(db, d.worker_id);
   return {
     requestId: d.request_id,
@@ -128,7 +134,9 @@ export function delegationView(db: Db, d: DelegationRow, p: PhaseInfo): Delegati
     openedAt: d.opened_at,
     closedAt: d.closed_at,
     returnPath: d.return_path,
-    returnPathStatus: d.return_path_status,
+    returnPathStatus: rp.status,
+    returnReadiness: rp,
+    followUps: followUpCounts(parentMail(db, d)),
     handoff: handoffReadiness(db, d),
   };
 }
@@ -204,9 +212,10 @@ export function delegationDetail(v: DelegationView): string {
       .filter(Boolean)
       .join("  "),
     ...(v.worker.cwd ? [`cwd       ${v.worker.cwd}`] : []),
-    `return    ${v.returnPath} — ${v.returnPathStatus}`,
+    `return    ${v.returnPath} — ${v.returnPathStatus} (${v.returnReadiness.readiness}): ${v.returnReadiness.reason}`,
     `handoff   ${v.handoff.ready ? "ready" : "not ready"} — ${v.handoff.reason}`,
   ];
+  if (v.followUps.total > 0) lines.push(`followups ${followUpLine(v.followUps)}`);
   if (v.pendingQuestion) lines.push(`question  ${v.pendingQuestion.id} ${v.pendingQuestion.summary ?? ""}`);
   if (v.latestSummary) lines.push(`summary   ${v.latestSummary}`);
   if (v.probe) lines.push(`probe     ${JSON.stringify(v.probe)}`);
@@ -226,4 +235,11 @@ export function delegationsPlain(views: DelegationView[]): string[] {
       v.latestSummary ?? "-",
     ].join("\t"),
   );
+}
+
+export function followUpLine(f: FollowUpCounts): string {
+  const parts = [`${f.total} sent`, `${f.pending} not acknowledged`];
+  if (f.unseen > 0) parts.push(`${f.unseen} never shown`);
+  if (f.unhandled > 0) parts.push(`${f.unhandled} settled unhandled`);
+  return parts.join(", ");
 }

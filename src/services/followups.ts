@@ -60,3 +60,44 @@ export function claimFollowUps(db: Db, provider: string, nativeId: string): Foll
     return { workerId: worker_id, parentId: parent_id, requestId: request_id, messages: rows };
   });
 }
+
+/**
+ * Parent mail a worker must handle within its delegation: every parent-to-worker message of the
+ * delegation's correlation except the request itself (follow-ups and answers to questions), with receipts.
+ * Handled means acknowledged by the worker; seen alone is not handled.
+ */
+export function parentMail(db: Db, d: { request_id: string; parent_id: string; worker_id: string }) {
+  return db
+    .query<MessageRow, [Record<string, string>]>(
+      `SELECT m.*, r.seen_at, r.acknowledged_at, r.settled_reason
+         FROM messages m JOIN receipts r ON r.message_id = m.id
+        WHERE m.correlation_id = $request AND m.from_id = $parent AND m.to_id = $worker AND m.type <> 'request'
+        ORDER BY m.sequence`,
+    )
+    .all({ request: d.request_id, parent: d.parent_id, worker: d.worker_id });
+}
+
+export interface FollowUpCounts {
+  total: number;
+  /** Not acknowledged by the worker yet; blocks a success result. */
+  pending: number;
+  /** Pending and never shown to the worker (no wait, read-and-ack or doorbell delivered it). */
+  unseen: number;
+  /** Settled by the delegation's end without the worker acknowledging them. */
+  unhandled: number;
+  pendingIds: string[];
+  unhandledIds: string[];
+}
+
+export function followUpCounts(rows: MessageRow[]): FollowUpCounts {
+  const pending = rows.filter((m) => !m.acknowledged_at);
+  const unhandled = rows.filter((m) => m.settled_reason);
+  return {
+    total: rows.length,
+    pending: pending.length,
+    unseen: pending.filter((m) => !m.seen_at).length,
+    unhandled: unhandled.length,
+    pendingIds: pending.map((m) => m.id),
+    unhandledIds: unhandled.map((m) => m.id),
+  };
+}

@@ -184,6 +184,7 @@ describe("roles and terminal states", () => {
     });
     expect(answer.to).toBe(w);
     expect(s.ok(["delegations", d.requestId], { as: LEAD }).delegations[0].phase).toBe("pending");
+    s.ok(["ack", answer.messageId], { as: w });
 
     const r = s.ok(
       [

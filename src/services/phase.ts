@@ -133,7 +133,7 @@ function progressSince(msgs: MessageRow[], turn: TurnRow, sinceIso: string): boo
   return msgs.some((m) => m.turn_ref === turn.id && m.type === "progress" && m.created_at > sinceIso);
 }
 
-function latestAnswer(msgs: MessageRow[], d: DelegationRow): MessageRow | null {
+export function latestAnswer(msgs: MessageRow[], d: DelegationRow): MessageRow | null {
   const questionIds = new Set(
     msgs.filter((m) => m.type === "question" && m.from_id === d.worker_id).map((m) => m.id),
   );

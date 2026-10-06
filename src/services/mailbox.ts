@@ -29,6 +29,7 @@ import {
 import { activeTurnForSession } from "../store/observations.ts";
 import { getSession, registerSession, type SessionRow } from "../store/sessions.ts";
 import { hashIntent, newId } from "../util/misc.ts";
+import { followUpCounts, parentMail } from "./followups.ts";
 
 export interface ReturnPathInfo {
   returnPath: ReturnPath;
@@ -42,7 +43,7 @@ export function proposeReturnPath(parent: SessionRow): ReturnPathInfo {
     return {
       returnPath: "background_wait",
       returnPathStatus: "setup_required",
-      returnPathReason: "arm one background `agentbus wait --timeout 30m --probe 60s` and record it",
+      returnPathReason: "arm one background `agentbus wait --replace --timeout 30m --probe 60s --json`",
     };
   }
   if (parent.provider === "codex") {
@@ -83,6 +84,8 @@ export interface SendReceipt {
   message: MessageRow;
   duplicate: boolean;
   delegation: DelegationRow | null;
+  /** Request ID of the open delegation this message joined as a follow-up, if any. */
+  joined: string | null;
 }
 
 export function sendMessage(db: Db, caller: SessionRow, input: SendInput): SendReceipt {
@@ -102,7 +105,12 @@ export function sendMessage(db: Db, caller: SessionRow, input: SendInput): SendR
       const existing = getByKey(db, caller.id, input.key);
       if (existing) {
         if (existing.intent_hash !== hash) throw conflictOnKey(input.key, existing);
-        return { message: existing, duplicate: true, delegation: getDelegation(db, existing.id) };
+        return {
+          message: existing,
+          duplicate: true,
+          delegation: getDelegation(db, existing.id),
+          joined: existing.correlation_id === existing.id ? null : existing.correlation_id,
+        };
       }
     }
     if (input.recipient.provider === "system")
@@ -122,15 +130,18 @@ export function sendMessage(db: Db, caller: SessionRow, input: SendInput): SendR
       }
     }
     // A parent's message to a worker of its open delegation is a follow-up: it joins that correlation, so
-    // the worker's correlated read and wait and the Claude doorbell hook all surface it mid-task.
-    const task = input.type === "message" ? openDelegationForWorker(db, input.recipient.id) : null;
+    // the worker's correlated read and wait and the Claude doorbell hook all surface it mid-task, and a
+    // success result waits for its acknowledgement. Once the delegation has ended this is an ordinary
+    // message; `followUp` is the path that refuses instead.
+    const open = input.type === "message" ? openDelegationForWorker(db, input.recipient.id) : null;
+    const task = open?.parent_id === caller.id ? open : null;
     const message = insertMessage(db, {
       fromId: caller.id,
       toId: input.recipient.id,
       type: input.type,
       summary: input.summary,
       body: input.body,
-      correlationId: task?.parent_id === caller.id ? task.request_id : null,
+      correlationId: task?.request_id ?? null,
       inReplyTo: null,
       idempotencyKey: input.key,
       intentHash: hash,
@@ -152,7 +163,71 @@ export function sendMessage(db: Db, caller: SessionRow, input: SendInput): SendR
         returnPathReason: rp.returnPathReason,
       });
     }
-    return { message, duplicate: false, delegation };
+    return { message, duplicate: false, delegation, joined: task?.request_id ?? null };
+  });
+}
+
+export interface FollowUpInput {
+  /** Request ID or unambiguous worker name among the caller's delegations. */
+  target: string;
+  body: string;
+  summary: string | null;
+  key: string | null;
+}
+
+export interface FollowUpReceipt {
+  message: MessageRow;
+  duplicate: boolean;
+  delegation: DelegationRow;
+}
+
+/** A delegation that has ended refuses follow-ups: its worker will not handle them. */
+export function assertAcceptsFollowUps(d: DelegationRow): void {
+  if (d.state === "open") return;
+  throw conflict(
+    "delegation_closed",
+    `Delegation ${d.request_id} is already ${d.state}${d.outcome ? `/${d.outcome}` : ""}; its worker will not handle a follow-up. Start a new request if the work must continue`,
+    { requestId: d.request_id, state: d.state, outcome: d.outcome, resultId: d.result_id },
+  );
+}
+
+/**
+ * A follow-up to the worker of one of the caller's delegations. The open check and the insert share one
+ * transaction with the worker's result, so either the follow-up commits first (and a success result waits
+ * for its acknowledgement) or the result does (and the follow-up is refused, exit 5): never silently settled.
+ */
+export function followUp(db: Db, caller: SessionRow, input: FollowUpInput): FollowUpReceipt {
+  return tx(db, () => {
+    const d = selectDelegation(db, caller, input.target);
+    const hash = hashIntent({
+      kind: "followup",
+      request: d.request_id,
+      body: input.body,
+      summary: input.summary,
+    });
+    if (input.key) {
+      const existing = getByKey(db, caller.id, input.key);
+      if (existing) {
+        if (existing.intent_hash !== hash) throw conflictOnKey(input.key, existing);
+        return { message: existing, duplicate: true, delegation: getDelegation(db, d.request_id)! };
+      }
+    }
+    assertAcceptsFollowUps(d);
+    const message = insertMessage(db, {
+      fromId: caller.id,
+      toId: d.worker_id,
+      type: "message",
+      summary: input.summary,
+      body: input.body,
+      correlationId: d.request_id,
+      inReplyTo: null,
+      idempotencyKey: input.key,
+      intentHash: hash,
+      outcome: null,
+      notice: null,
+      turnRef: null,
+    });
+    return { message, duplicate: false, delegation: d };
   });
 }
 
@@ -171,6 +246,8 @@ export interface ReplyReceipt {
   delegation: DelegationRow | null;
   closedDelegation: boolean;
   attribution: "turn" | "unavailable" | "not_applicable";
+  /** Parent follow-ups a non-success result settled without the worker acknowledging them. */
+  unhandledFollowUps: string[];
 }
 
 /** Task replies are attributed to a bound turn when one was active; other replies have no turn. */
@@ -216,12 +293,15 @@ export function replyMessage(db: Db, caller: SessionRow, input: ReplyInput): Rep
       const existing = getByKey(db, caller.id, input.key);
       if (existing) {
         if (existing.intent_hash !== hash) throw conflictOnKey(input.key, existing);
+        const d = getDelegation(db, existing.correlation_id);
         return {
           message: existing,
           duplicate: true,
-          delegation: getDelegation(db, existing.correlation_id),
+          delegation: d,
           closedDelegation: false,
           attribution: attributionOf(existing),
+          unhandledFollowUps:
+            existing.type === "result" && d ? followUpCounts(parentMail(db, d)).unhandledIds : [],
         };
       }
     }
@@ -234,7 +314,22 @@ export function replyMessage(db: Db, caller: SessionRow, input: ReplyInput): Rep
       throw usageError("Notices cannot be replied to; the delegation identifies their worker");
     }
     const delegation = getDelegation(db, original.correlation_id);
+    if (
+      delegation &&
+      delegation.state !== "open" &&
+      caller.id === delegation.parent_id &&
+      original.from_id === delegation.worker_id
+    ) {
+      // A late answer or follow-up: the worker no longer handles this delegation, so say so instead of
+      // filing mail nobody will act on.
+      throw conflict(
+        "delegation_closed",
+        `Delegation ${delegation.request_id} is already ${delegation.state}${delegation.outcome ? `/${delegation.outcome}` : ""}; its worker will not handle this reply. Start a new request if the work must continue`,
+        { requestId: delegation.request_id, state: delegation.state, outcome: delegation.outcome },
+      );
+    }
     let turnRef: string | null = null;
+    let unhandledFollowUps: string[] = [];
     if (TASK_TYPES.has(input.type)) {
       if (!delegation) {
         throw usageError(`${input.type} replies must belong to a delegation; this correlation has none`);
@@ -265,6 +360,22 @@ export function replyMessage(db: Db, caller: SessionRow, input: ReplyInput): Rep
             },
           );
         }
+      }
+      if (input.type === "result") {
+        const pending = followUpCounts(parentMail(db, delegation));
+        if (pending.pending > 0 && input.outcome === "success") {
+          throw conflict(
+            "followups_pending",
+            `${pending.pending} parent follow-up(s) are not acknowledged: ${pending.pendingIds.join(", ")}. Read them with \`read --correlation ${delegation.request_id}\`, handle them, \`ack\` them, then publish the result again with the same --key. Other outcomes are accepted and report them as unhandled`,
+            {
+              requestId: delegation.request_id,
+              pending: pending.pendingIds,
+              unseen: pending.unseen,
+            },
+          );
+        }
+        // blocked/failed/unknown hand the task back: the parent sees which follow-ups went unhandled.
+        unhandledFollowUps = pending.pendingIds;
       }
       const worker = getSession(db, caller.id)!;
       const turn = activeTurnForSession(db, worker.id, worker.generation);
@@ -299,6 +410,7 @@ export function replyMessage(db: Db, caller: SessionRow, input: ReplyInput): Rep
       delegation: delegation ? getDelegation(db, delegation.request_id) : null,
       closedDelegation: closed,
       attribution: attributionOf(message),
+      unhandledFollowUps,
     };
   });
 }

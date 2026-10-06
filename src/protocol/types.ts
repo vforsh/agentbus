@@ -55,7 +55,12 @@ export const PHASES = [
 export type Phase = (typeof PHASES)[number];
 
 export type ReturnPath = "heartbeat" | "background_wait" | "manual";
-export type ReturnPathStatus = "setup_required" | "ready" | "unsupported";
+/**
+ * `ready` only on current evidence (a live watcher, or a fresh heartbeat check-in); `unknown` when the
+ * evidence exists but cannot be verified or has gone stale. Delegation rows keep the status proposed at
+ * creation; views derive the current one (services/returnpath.ts).
+ */
+export type ReturnPathStatus = "setup_required" | "ready" | "unsupported" | "unknown";
 
 /** Bodies above 1 MiB are rejected; batches are bounded at 4 MiB of body text. */
 export const BODY_LIMIT = 1024 * 1024;

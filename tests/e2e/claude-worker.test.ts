@@ -208,7 +208,7 @@ describe("delegated turn capture", () => {
     expect(notices(w)).toHaveLength(0);
     expect(phase(w)).toMatchObject({ phase: "question", backgroundRunning: 1 });
 
-    s.ok(["reply", q.messageId, "--key", `answer-${q.messageId}`, "--file", "-"], {
+    const answer = s.ok(["reply", q.messageId, "--key", `answer-${q.messageId}`, "--file", "-"], {
       as: LEAD,
       input: "SQLite",
     });
@@ -220,6 +220,7 @@ describe("delegated turn capture", () => {
     );
     s.hook(ups(w, p2, notification));
     expect(phase(w).phase).toBe("working");
+    s.ok(["ack", answer.messageId], { as: w.workerId });
     s.ok(
       [
         "reply",

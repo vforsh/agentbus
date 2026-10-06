@@ -199,7 +199,7 @@ describe("runner events", () => {
     expect(notices(d.requestId)).toHaveLength(0);
     expect(phase(d.requestId).phase).toBe("question");
 
-    s.ok(["reply", q.messageId, "--file", "-"], { as: LEAD, input: "config.local.json" });
+    const answer = s.ok(["reply", q.messageId, "--file", "-"], { as: LEAD, input: "config.local.json" });
     expect(phase(d.requestId).phase).toBe("pending");
     // A resume naming another thread, or reporting a different thread, is a conflict.
     const wrong: Run = { ...d, runId: uuid(), ordinal: 0 };
@@ -212,6 +212,7 @@ describe("runner events", () => {
     expect(emit(resumed, "thread_started", { threadId, resumeThreadId: threadId }).result.code).toBe(0);
     emit(resumed, "turn_started");
     expect(phase(d.requestId).phase).toBe("working");
+    s.ok(["ack", answer.messageId], { env: { AGENTBUS_SESSION_ID: d.workerId } });
     s.ok(
       [
         "reply",

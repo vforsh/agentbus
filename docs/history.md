@@ -141,6 +141,12 @@ The following experiments were recorded by the earlier plan on 2026-09-30 with C
 
 ## Revision log
 
+2026-10-06, completion gate, return-path evidence and `explain`:
+
+- Reproduced through the public CLI: a worker that had read its correlation could publish `result/success` after a new parent follow-up arrived; the result exited 0 and settled the follow-up as `delegation_done`, and a `send` right after completion exited 0 with an unrelated correlation. A `success` result now requires every parent follow-up and answer of the delegation to be acknowledged (`followups_pending`, exit 5), checked in the result's transaction. `followup <request>` refuses an ended delegation, as do parent replies into one; non-success results are accepted and report `unhandledFollowUps`; `close` is never gated. Workers whose answers were never acknowledged now get a visible refusal instead of a silent settlement, so the worker contract and the skill say to ack before publishing.
+- Reproduced: a reported `background_wait`/`ready` binding stayed `ready` after the only wait timed out, and new delegations started at `setup_required` despite a running watcher. Migration 6 records each wait's coverage, process and owner identities and expiry; readiness is derived from them (`armed`, `owner_lost`, `unverified`, `not_armed`) or, for app-only heartbeats, from check-ins (`reported`, `stale`, `not_reported`), with `returnPathStatus` gaining `unknown`. `session update` no longer copies a reported status into delegation rows; `--refresh` records a heartbeat check-in; `doctor` checks the caller's return path.
+- `explain <request>` combines mail summaries, observations, binding and wait activity into one timeline with a diagnosis and next actions, reusing phase, handoff, follow-up and return-path derivations; it changes nothing unless `--probe` is given.
+
 2026-10-06, Codex wake capability spike:
 
 - PATH and Desktop-bundled CLI `0.160.1` both failed explicit Unix-socket queue probes before thread lookup; `app-server daemon version` and `app-server proxy` failed at the same control socket (`Connection refused`, exit 1).

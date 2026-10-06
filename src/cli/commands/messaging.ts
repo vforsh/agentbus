@@ -14,11 +14,20 @@ import {
   SUMMARY_LIMIT,
 } from "../../protocol/types.ts";
 import { requireCaller } from "../../services/caller.ts";
-import { ackMessages, closeByParent, replyMessage, sendMessage } from "../../services/mailbox.ts";
+import {
+  ackMessages,
+  assertAcceptsFollowUps,
+  closeByParent,
+  followUp,
+  replyMessage,
+  selectDelegation,
+  sendMessage,
+} from "../../services/mailbox.ts";
 import { derivePhase } from "../../services/phase.ts";
+import { returnPathResolver } from "../../services/returnpath.ts";
 import { runWait, type WaitResult } from "../../services/wait.ts";
 import type { Db } from "../../store/db.ts";
-import { getDelegation } from "../../store/delegations.ts";
+import { getDelegation, latestDelegationBetween } from "../../store/delegations.ts";
 import { selectInbox } from "../../store/messages.ts";
 import { endWaitArm } from "../../store/observations.ts";
 import { requireAddress } from "../../store/sessions.ts";
@@ -124,16 +133,24 @@ export function registerMessaging(program: Command): void {
             return;
           }
           const r = sendMessage(db, caller.session, { recipient, type: opts.type, body, summary, key });
+          if (opts.type === "message" && !r.joined) {
+            const last = latestDelegationBetween(db, caller.session.id, recipient.id);
+            if (last && last.state !== "open")
+              ctx.warn(
+                `delegation ${last.request_id} to this worker is already ${last.state}; this is an ordinary message, not a follow-up (\`agentbus followup\` refuses instead)`,
+              );
+          }
           const data = {
             messageId: r.message.id,
             sequence: r.message.sequence,
             duplicate: r.duplicate,
             correlationId: r.message.correlation_id,
+            joined: r.joined,
             delegation: r.delegation
               ? {
                   ...delegationSummary(db, r.delegation.request_id),
                   returnPath: r.delegation.return_path,
-                  returnPathStatus: r.delegation.return_path_status,
+                  returnPathStatus: returnPathResolver(db)(caller.session, r.delegation).status,
                 }
               : null,
           };
@@ -142,6 +159,60 @@ export function registerMessaging(program: Command): void {
             () =>
               `${r.duplicate ? "Already sent" : "Sent"} ${opts.type} ${r.message.id} (#${r.message.sequence})`,
             () => [r.message.id, String(r.message.sequence), String(r.duplicate)].join("\t"),
+          );
+        },
+      ),
+    );
+
+  program
+    .command("followup <request>")
+    .description(
+      "Send a follow-up to the worker of one of your open delegations; refused once it has ended (exit 5)",
+    )
+    .option("--file <path|->", "body file, or - for stdin")
+    .option("--key <key>", "idempotency key, unique per sender")
+    .option("--summary <text>", "one-line summary (at most 200 characters)")
+    .option("--dry-run", "validate and describe without writing")
+    .action(
+      action(
+        async (
+          ctx,
+          target: string,
+          opts: { file?: string; key?: string; summary?: string; dryRun?: boolean },
+        ) => {
+          const body = await readBody(opts.file, BODY_LIMIT);
+          const summary = parseSummary(opts.summary);
+          const key = parseKey(opts.key);
+          const db = ctx.db();
+          const caller = requireCaller(db, ctx.opts.as);
+          if (opts.dryRun) {
+            const d = selectDelegation(db, caller.session, target);
+            assertAcceptsFollowUps(d);
+            ctx.emit(
+              { dryRun: true, messageId: `preview-${newId()}`, requestId: d.request_id, state: d.state },
+              () =>
+                `Would send a follow-up (${Buffer.byteLength(body)} bytes) to delegation ${d.request_id} (${d.state})`,
+            );
+            return;
+          }
+          const r = followUp(db, caller.session, { target, body, summary, key });
+          const data = {
+            messageId: r.message.id,
+            sequence: r.message.sequence,
+            duplicate: r.duplicate,
+            requestId: r.delegation.request_id,
+            correlationId: r.message.correlation_id,
+            to: r.message.to_id,
+            delegation: delegationSummary(db, r.delegation.request_id),
+          };
+          ctx.emit(
+            data,
+            () =>
+              `${r.duplicate ? "Already sent" : "Sent"} follow-up ${r.message.id} (#${r.message.sequence}) to delegation ${r.delegation.request_id}`,
+            () =>
+              [r.message.id, String(r.message.sequence), String(r.duplicate), r.delegation.request_id].join(
+                "\t",
+              ),
           );
         },
       ),
@@ -212,9 +283,14 @@ export function registerMessaging(program: Command): void {
             turnRef: r.message.turn_ref,
             attribution: r.attribution,
             delegation: delegationSummary(db, r.delegation?.request_id ?? null),
+            unhandledFollowUps: r.unhandledFollowUps,
           };
           if (r.attribution === "unavailable")
             ctx.warn("no bound turn found for this reply; finish notices for the turn are not suppressed");
+          if (r.unhandledFollowUps.length > 0)
+            ctx.warn(
+              `${r.unhandledFollowUps.length} parent follow-up(s) were never acknowledged and are reported to the parent as unhandled`,
+            );
           ctx.emit(
             data,
             () =>

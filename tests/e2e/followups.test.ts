@@ -53,6 +53,25 @@ const stop = (w: Worker, text: string) =>
   s.hook(payload(w, "Stop-idle", { last_assistant_message: text, background_tasks: [] }));
 const send = (to: string, as: string, body: string, summary?: string) =>
   s.ok(["send", to, "--file", "-", ...(summary ? ["--summary", summary] : [])], { as, input: body });
+const followup = (w: Worker, body: string, extra: string[] = []) =>
+  s.ok(["followup", w.requestId, "--file", "-", ...extra], { as: LEAD, input: body });
+const result = (w: Worker, outcome = "success", key?: string) =>
+  s.run(
+    [
+      "reply",
+      w.requestId,
+      "--type",
+      "result",
+      "--outcome",
+      outcome,
+      ...(key ? ["--key", key] : []),
+      "--file",
+      "-",
+    ],
+    { as: w.workerId, input: `result: ${outcome}` },
+  );
+const receipt = (id: string) =>
+  s.sql("SELECT acknowledged_at, settled_reason FROM receipts WHERE message_id = ?", id)[0];
 const phase = (w: Worker) => s.ok(["delegations", w.requestId], { as: LEAD }).delegations[0].phase;
 const notices = (w: Worker) =>
   s.ok(["read", "--correlation", w.requestId, "--type", "notice"], { as: LEAD }).messages;
@@ -117,21 +136,168 @@ describe("parent follow-ups", () => {
   });
 });
 
-describe("settlement", () => {
-  const receipt = (id: string) =>
-    s.sql("SELECT acknowledged_at, settled_reason FROM receipts WHERE message_id = ?", id)[0];
+describe("completion gate", () => {
+  test("follow-up before result: success waits until the follow-up is acknowledged", () => {
+    const w = runningWorker("gated");
+    const f = followup(w, "Also handle the empty state", ["--summary", "Scope change"]);
+    expect(f).toMatchObject({ requestId: w.requestId, correlationId: w.requestId, to: w.workerId });
+    const refused = result(w, "success", "result-gated");
+    expect(refused.code).toBe(5);
+    expect(refused.json?.error).toMatchObject({
+      code: "followups_pending",
+      details: { requestId: w.requestId, pending: [f.messageId], unseen: 1 },
+    });
+    expect(s.ok(["delegations", w.requestId], { as: LEAD }).delegations[0]).toMatchObject({
+      state: "open",
+      followUps: { pending: 1, unseen: 1 },
+    });
+    // Seen is not handled: a read-only sweep and the doorbell's claim leave the gate closed.
+    expect(s.ok(["read", "--correlation", w.requestId], { as: w.workerId }).messages).toHaveLength(1);
+    expect(JSON.parse(toolCall(w).stdout).hookSpecificOutput.additionalContext).toContain(f.messageId);
+    expect(result(w, "success", "result-gated").json?.error.details).toMatchObject({ unseen: 0 });
+    s.ok(["ack", f.messageId], { as: w.workerId });
+    const done = result(w, "success", "result-gated");
+    expect(done.code).toBe(0);
+    expect(done.json?.data).toMatchObject({ duplicate: false, unhandledFollowUps: [] });
+    // The refused attempts consumed no key: the exact retry returns the committed result.
+    expect(result(w, "success", "result-gated").json?.data).toMatchObject({
+      messageId: done.json?.data.messageId,
+      duplicate: true,
+    });
+  });
 
-  test("a result settles the worker's unread mail; the parent still acknowledges the result", () => {
-    const w = runningWorker("finisher");
-    const late = send(w.workerId, LEAD, "one more thing");
-    const result = s.ok(
-      ["reply", w.requestId, "--type", "result", "--outcome", "success", "--summary", "Done", "--file", "-"],
-      { as: w.workerId, input: "done" },
+  test("answers to questions are follow-ups too", () => {
+    const w = runningWorker("asked");
+    const q = s.ok(["reply", w.requestId, "--type", "question", "--summary", "Which DB?", "--file", "-"], {
+      as: w.workerId,
+      input: "Postgres or SQLite?",
+    });
+    const a = s.ok(["reply", q.messageId, "--file", "-"], { as: LEAD, input: "SQLite" });
+    expect(result(w).json?.error).toMatchObject({
+      code: "followups_pending",
+      details: { pending: [a.messageId] },
+    });
+    s.ok(["ack", a.messageId], { as: w.workerId });
+    expect(result(w).code).toBe(0);
+  });
+
+  test("result before follow-up: the follow-up, a late answer and a late reply are refused, not filed", () => {
+    const w = runningWorker("late");
+    const q = s.ok(["reply", w.requestId, "--type", "question", "--summary", "Ok?", "--file", "-"], {
+      as: w.workerId,
+      input: "proceeding unless told otherwise",
+    });
+    expect(result(w, "success", "result-late").code).toBe(0);
+    const late = s.run(["followup", w.requestId, "--file", "-"], { as: LEAD, input: "wait, one more thing" });
+    expect(late.code).toBe(5);
+    expect(late.json?.error).toMatchObject({
+      code: "delegation_closed",
+      details: { requestId: w.requestId, state: "done", outcome: "success" },
+    });
+    expect(s.run(["followup", "late", "--dry-run", "--file", "-"], { as: LEAD, input: "x" }).code).toBe(5);
+    const answer = s.run(["reply", q.messageId, "--file", "-"], { as: LEAD, input: "stop" });
+    expect(answer.json?.error.code).toBe("delegation_closed");
+    // Generic messaging still works, but no longer pretends to be a follow-up.
+    const plain = s.run(["send", w.workerId, "--file", "-"], { as: LEAD, input: "fyi" });
+    expect(plain.code).toBe(0);
+    expect(plain.json?.data).toMatchObject({ joined: null });
+    expect(plain.json?.data.correlationId).not.toBe(w.requestId);
+    expect(plain.stderr).toContain("not a follow-up");
+    expect(s.sql("SELECT count(*) AS n FROM messages WHERE correlation_id = ?", w.requestId)[0].n).toBe(3);
+  });
+
+  test("a generic send that joins an open delegation is held to the same gate", () => {
+    const w = runningWorker("joined");
+    const f = send(w.workerId, LEAD, "port is 8080");
+    expect(f.joined).toBe(w.requestId);
+    expect(result(w).json?.error.code).toBe("followups_pending");
+  });
+
+  test("keyed follow-ups return their original receipt, even after the delegation ended", () => {
+    const w = runningWorker("keyed");
+    const first = followup(w, "use v2", ["--key", "fu-1"]);
+    expect(followup(w, "use v2", ["--key", "fu-1"])).toMatchObject({
+      messageId: first.messageId,
+      duplicate: true,
+    });
+    const changed = s.run(["followup", w.requestId, "--key", "fu-1", "--file", "-"], {
+      as: LEAD,
+      input: "use v3",
+    });
+    expect(changed.json?.error.code).toBe("idempotency_conflict");
+    s.ok(["ack", first.messageId], { as: w.workerId });
+    expect(result(w).code).toBe(0);
+    expect(followup(w, "use v2", ["--key", "fu-1"])).toMatchObject({
+      messageId: first.messageId,
+      duplicate: true,
+    });
+    expect(
+      s.run(["followup", w.requestId, "--key", "fu-2", "--file", "-"], { as: LEAD, input: "x" }).code,
+    ).toBe(5);
+  });
+
+  test("only the parent can follow up; names resolve among its own delegations", () => {
+    const w = runningWorker("named");
+    expect(s.run(["followup", w.requestId, "--file", "-"], { as: OTHER, input: "x" }).json?.error.code).toBe(
+      "not_parent",
     );
+    expect(s.run(["followup", "named", "--file", "-"], { as: OTHER, input: "x" }).code).toBe(4);
+    expect(followup({ ...w, requestId: "named" }, "by name").requestId).toBe(w.requestId);
+  });
+
+  test("concurrent follow-up and result: exactly one wins, the other is refused visibly", async () => {
+    for (let i = 0; i < 6; i++) {
+      const w = runningWorker(`race-${i}`);
+      const [f, r] = await Promise.all([
+        s.runAsync(["followup", w.requestId, "--file", "-"], { as: LEAD, input: `race ${i}` }),
+        s.runAsync(["reply", w.requestId, "--type", "result", "--outcome", "success", "--file", "-"], {
+          as: w.workerId,
+          input: "done",
+        }),
+      ]);
+      expect([f.code, r.code].sort()).toEqual([0, 5]);
+      if (f.code === 0) {
+        expect(r.json?.error.code).toBe("followups_pending");
+        expect(receipt(f.json?.data.messageId)).toEqual({ acknowledged_at: null, settled_reason: null });
+      } else {
+        expect(f.json?.error.code).toBe("delegation_closed");
+      }
+      const leftovers = s.sql(
+        "SELECT count(*) AS n FROM receipts r JOIN messages m ON m.id = r.message_id WHERE m.correlation_id = ? AND r.settled_reason IS NOT NULL AND m.type = 'message'",
+        w.requestId,
+      );
+      expect(leftovers[0].n).toBe(0);
+      s.ok(["close", w.requestId], { as: LEAD });
+    }
+  });
+
+  test("the parent's close is never gated and settles pending follow-ups", () => {
+    const w = runningWorker("cancelled");
+    const f = followup(w, "never mind");
+    const closed = s.ok(["close", w.requestId], { as: LEAD });
+    expect(closed).toMatchObject({ state: "closed", changed: true });
+    expect(receipt(f.messageId)).toMatchObject({ settled_reason: "delegation_closed" });
+    expect(result(w, "failed").json?.error.code).toBe("delegation_closed");
+  });
+});
+
+describe("settlement", () => {
+  test("a non-success result settles unacknowledged follow-ups and reports them as unhandled", () => {
+    const w = runningWorker("finisher");
+    const late = followup(w, "one more thing");
+    const r = s.run(["reply", w.requestId, "--type", "result", "--outcome", "blocked", "--file", "-"], {
+      as: w.workerId,
+      input: "cannot continue",
+    });
+    expect(r.code).toBe(0);
+    expect(r.json?.data.unhandledFollowUps).toEqual([late.messageId]);
+    expect(r.stderr).toContain("never acknowledged");
     expect(receipt(late.messageId)).toMatchObject({ settled_reason: "delegation_done" });
     expect(receipt(late.messageId).acknowledged_at).not.toBeNull();
-    expect(receipt(result.messageId)).toEqual({ acknowledged_at: null, settled_reason: null });
+    expect(receipt(r.json?.data.messageId)).toEqual({ acknowledged_at: null, settled_reason: null });
     expect(s.ok(["read"], { as: w.workerId }).messages).toHaveLength(0);
+    const view = s.ok(["delegations", w.requestId], { as: LEAD }).delegations[0];
+    expect(view.followUps).toMatchObject({ total: 1, unhandled: 1, unhandledIds: [late.messageId] });
   });
 
   test("a parent's close settles the whole correlation, visible in history", () => {

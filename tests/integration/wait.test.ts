@@ -114,7 +114,8 @@ describe("wait", () => {
     expect(attention.messages[0].id).toBe(q.messageId);
     expect(attention.batch.find((b: any) => b.requestId === two.requestId).phase).not.toBe("done");
 
-    s.ok(["reply", q.messageId, "--file", "-"], { as: P, input: "this one" });
+    const answer = s.ok(["reply", q.messageId, "--file", "-"], { as: P, input: "this one" });
+    s.ok(["ack", answer.messageId], { as: one.workerId });
     const waiter = s.runAsync(["wait", "--settled", "--timeout", "10s"], { as: P });
     await sleep(500);
     s.ok(["reply", one.requestId, "--type", "result", "--outcome", "success", "--file", "-"], {

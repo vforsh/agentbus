@@ -7,7 +7,10 @@ import { hookStatus } from "../../adapters/claude/settings.ts";
 import { spoolCounts } from "../../adapters/claude/spool.ts";
 import { installedBinPath, type Resolved, resolvePaths, SOURCE_ENTRY } from "../../config/config.ts";
 import { resolveCallerRef } from "../../services/caller.ts";
+import { returnPathResolver } from "../../services/returnpath.ts";
 import { readSchemaVersion, SCHEMA_VERSION } from "../../store/db.ts";
+import { openDelegationsForParent } from "../../store/delegations.ts";
+import { resolveAddress } from "../../store/sessions.ts";
 import { fileExists, modeOf } from "../../util/fsx.ts";
 import { realOrSelf } from "../../util/misc.ts";
 import { action } from "../action.ts";
@@ -196,10 +199,41 @@ function runChecks(opts: { config?: string; stateDir?: string; as?: string }): C
       ref ? `${ref.address} (from ${ref.detail})` : "no caller identity in this environment",
       ref ? undefined : "pass --as or set AGENTBUS_SESSION_ID",
     );
+    if (ref && fileExists(paths.dbPath)) {
+      const check = returnPathCheck(paths, ref.address);
+      if (check) add("return_path", check.status, check.message, check.hint);
+    }
   } catch (err) {
     add("caller", "warn", (err as Error).message);
   }
   return checks;
+}
+
+/** The caller's current return path as a parent of open delegations; read-only (one `ps` call at most). */
+function returnPathCheck(paths: Resolved, address: string): Omit<Check, "name"> | null {
+  const db = new Database(paths.dbPath, { readonly: true, strict: true });
+  try {
+    if (readSchemaVersion(db) !== SCHEMA_VERSION) return null;
+    const me = resolveAddress(db, address);
+    if (!me) return null;
+    const open = openDelegationsForParent(db, me.id);
+    if (open.length === 0) return { status: "ok", message: "no open delegations as a parent" };
+    const resolve = returnPathResolver(db);
+    const worst = open.map((d) => resolve(me, d)).find((r) => r.status !== "ready") ?? resolve(me, open[0]!);
+    const message = `${open.length} open delegation(s); ${worst.strategy} ${worst.readiness}: ${worst.reason}`;
+    if (worst.status === "ready") return { status: "ok", message };
+    const hint =
+      worst.strategy === "heartbeat"
+        ? "have each heartbeat run `agentbus session update <me> --refresh`, or recreate the heartbeat; otherwise poll with `agentbus read`"
+        : worst.strategy === "background_wait"
+          ? "arm one background `agentbus wait --replace --timeout 30m --probe 60s --json`"
+          : "poll with `agentbus read`";
+    return { status: "warn", message, hint };
+  } catch {
+    return null;
+  } finally {
+    db.close();
+  }
 }
 
 const STATUS_TAG: Record<Status, () => string> = {
