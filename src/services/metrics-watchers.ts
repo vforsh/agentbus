@@ -2,6 +2,20 @@ import { type Liveness, livenessAll, type ProcessIdentity } from "../adapters/pr
 import { MAX_WAIT_MS } from "../protocol/types.ts";
 import type { WaitArmRow } from "../store/observations.ts";
 
+function ownerLiveness(checks: Liveness[]): Liveness {
+  if (checks.includes("dead")) return "dead";
+  if (checks.length === 0 || checks.includes("unknown")) return "unknown";
+  return "alive";
+}
+
+function watcherState(process: Liveness, owner: Liveness) {
+  if (process === "dead") return "dead";
+  if (process === "unknown") return "unverified";
+  if (owner === "dead") return "ownerLost";
+  if (owner === "unknown") return "unverified";
+  return "live";
+}
+
 /** Deadline and liveness are independent: expiry alone never establishes process death. */
 export function watcherMetrics(arms: WaitArmRow[], now: number) {
   const open = arms.filter((a) => !a.ended_at);
@@ -18,20 +32,8 @@ export function watcherMetrics(arms: WaitArmRow[], now: number) {
   const counts = { live: 0, dead: 0, ownerLost: 0, unverified: 0, expired: 0, stale: 0 };
   const items = parsed.map(({ arm, self, owners }) => {
     const processLiveness = self ? check(self) : "unknown";
-    const ownerChecks = owners.map(check);
-    const ownerLiveness: Liveness = ownerChecks.includes("dead")
-      ? "dead"
-      : owners.length === 0 || ownerChecks.includes("unknown")
-        ? "unknown"
-        : "alive";
-    const state =
-      processLiveness === "dead"
-        ? "dead"
-        : processLiveness === "alive" && ownerLiveness === "dead"
-          ? "ownerLost"
-          : processLiveness === "alive" && ownerLiveness === "alive"
-            ? "live"
-            : "unverified";
+    const ownerStatus = ownerLiveness(owners.map(check));
+    const state = watcherState(processLiveness, ownerStatus);
     const deadline = arm.expires_at ? Date.parse(arm.expires_at) : Date.parse(arm.created_at) + MAX_WAIT_MS;
     const expired = deadline <= now;
     const stale = expired || state === "dead" || state === "ownerLost";
@@ -48,7 +50,7 @@ export function watcherMetrics(arms: WaitArmRow[], now: number) {
       effectiveExpiresAt: new Date(deadline).toISOString(),
       ageMs: Math.max(0, now - Date.parse(arm.created_at)),
       processLiveness,
-      ownerLiveness,
+      ownerLiveness: ownerStatus,
       state,
       expired,
       stale,

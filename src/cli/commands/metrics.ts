@@ -4,6 +4,17 @@ import { collectMetrics, type Metrics } from "../../services/metrics.ts";
 import { openStore } from "../../store/db.ts";
 import { action } from "../action.ts";
 
+const LATENCY_INTERVALS = ["commitToSeen", "seenToAck", "commitToAck"] as const;
+
+function backlogRows(m: Metrics) {
+  return [
+    { key: "questions", label: "questions", backlog: m.questions },
+    { key: "followups", label: "followups", backlog: m.followups },
+    { key: "awaitingSeen", label: "results awaiting seen", backlog: m.results.awaitingSeen },
+    { key: "awaitingAck", label: "results awaiting ack", backlog: m.results.awaitingAck },
+  ];
+}
+
 export function registerMetrics(program: Command): void {
   program
     .command("metrics")
@@ -32,7 +43,7 @@ function plain(m: Metrics): string[] {
     `snapshot\t${m.snapshotAt}\tms\t${m.scope.kind}\t${m.scope.parentId ?? "-"}`,
     `delegations\t${m.delegations.total}\t${m.delegations.withoutResult}`,
   ];
-  for (const key of ["commitToSeen", "seenToAck", "commitToAck"] as const) {
+  for (const key of LATENCY_INTERVALS) {
     const d = m.results[key];
     lines.push(
       [
@@ -49,14 +60,9 @@ function plain(m: Metrics): string[] {
       ].join("\t"),
     );
   }
-  for (const [name, b] of [
-    ["questions", m.questions],
-    ["followups", m.followups],
-    ["awaitingSeen", m.results.awaitingSeen],
-    ["awaitingAck", m.results.awaitingAck],
-  ] as const)
+  for (const { key, backlog: b } of backlogRows(m))
     lines.push(
-      ["backlog", name, b.count, b.unseen, b.oldest?.messageId ?? "-", b.oldest?.ageMs ?? "-"].join("\t"),
+      ["backlog", key, b.count, b.unseen, b.oldest?.messageId ?? "-", b.oldest?.ageMs ?? "-"].join("\t"),
     );
   const w = m.watchers;
   lines.push(
@@ -83,20 +89,15 @@ function human(m: Metrics): string {
   lines.push(
     `delegations: ${m.delegations.total} retained, ${m.delegations.withoutResult} without result; ${m.results.count} results`,
   );
-  for (const key of ["commitToSeen", "seenToAck", "commitToAck"] as const) {
+  for (const key of LATENCY_INTERVALS) {
     const d = m.results[key];
     lines.push(
       `${key}: ${d.measured} measured; min/mean/max ${d.minMs ?? "-"}/${d.meanMs ?? "-"}/${d.maxMs ?? "-"} ms; ${d.pending} pending, ${d.missing} missing, ${d.settled} settled, ${d.invalid} invalid`,
     );
   }
-  for (const [name, b] of [
-    ["questions", m.questions],
-    ["followups", m.followups],
-    ["results awaiting seen", m.results.awaitingSeen],
-    ["results awaiting ack", m.results.awaitingAck],
-  ] as const)
+  for (const { label, backlog: b } of backlogRows(m))
     lines.push(
-      `${name}: ${b.count} pending (${b.unseen} unseen); oldest ${b.oldest ? `${b.oldest.messageId}, ${b.oldest.ageMs} ms` : "-"}`,
+      `${label}: ${b.count} pending (${b.unseen} unseen); oldest ${b.oldest ? `${b.oldest.messageId}, ${b.oldest.ageMs} ms` : "-"}`,
     );
   const w = m.watchers;
   lines.push(
