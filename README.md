@@ -143,6 +143,7 @@ agentbus read [--ack] [--all] [--unseen] [--after <seq>] [--from] [--type] [--co
 agentbus wait [--timeout 60s] [--settled] [--probe <interval>] [--replace] [--after] [--from] [--type] [--correlation] [--limit]
 agentbus ack <message-id...> | close <request-id|name>
 agentbus status [<session>] [--probe]
+agentbus metrics [--global]
 agentbus explain <request-id|name> [--global] [--probe] [--limit 40]
 agentbus event ingest --provider claude --source hook        # stdin, silent; used by hooks
 agentbus event ingest --provider codex --source runner --file <event.json>
@@ -187,6 +188,83 @@ The companion `claude-threads` launcher provides `cleanup.sh cancel <name|reques
 - **Worker contract v1**: delimited `<agentbus-contract version="1">` block naming request, worker, parent and provider, whose commands run a per-worker executable (`workerBin`, `<state-dir>/workers/<worker-id>/agentbus`) that fixes `--state-dir`, `--config` and `--as`; a single path, so it survives a shell variable in zsh and fish. The first Claude `UserPromptSubmit` carrying exactly one unquoted block, from the expected directory, claims the pending worker.
 - **Observation**: Claude hooks and Codex runner events become turn bindings and observations. `turn_finished` notices are suppressed when that exact turn produced a question or result. Task notifications continue a delegated Claude turn only with proven provenance: a verified wait arm recorded by `agentbus wait` inside that turn, or a background task first seen in that turn's Stop inventory against a known baseline. Anything else supersedes the binding (phase `unknown`, `tracking_lost` notice).
 - **Ordering**: hook events of one session commit in capture order. While any event of that session sits in the spool, later events drain it first or queue behind it; a delayed prompt or Stop never rebinds or overwrites a newer turn. Permission and failure events are posted only when attributable to a bound turn.
+
+### Delivery and backlog metrics
+
+```bash
+agentbus metrics                         # current caller as parent; readable text
+agentbus --as claude:<session-id> metrics --json
+agentbus metrics --global --json         # all parents; no caller required
+agentbus metrics --plain                 # stable TSV summary
+```
+
+`metrics` opens SQLite read-only, takes one deferred snapshot, and never drains hooks, marks mail seen,
+acknowledges it, changes delegation state or calls provider CLIs. Local `ps` checks run after that
+snapshot, so watcher liveness is sampled slightly later, not an atomic OS/DB snapshot. Queued hook
+events are not reflected until explicitly ingested. No new schema or dependencies.
+
+Default scope includes **all retained delegations of the caller as parent**, including terminal history,
+with no recent-history cutoff. A worker calling this command sees its own children. `--global` includes
+every parent's retained history. Unrelated mail is excluded. Wait counts cover the parent's own waits
+and waits of its delegated workers, including historical workers; global counts include every session's
+waits. Pruning removes history from these metrics. An initialized empty mailbox returns zero counts,
+`oldest: null` and null latency statistics; a missing store still exits 4.
+
+JSON uses the normal `schemaVersion`/`ok`/`data` envelope; `data.metricsVersion: 1`, `snapshotAt` (UTC ISO),
+`units: "ms"`, and `scope: {kind: "parent"|"global", parentId: string|null}` identify the measurement.
+`delegations` reports `total` and `withoutResult` (includes open and closed-without-result delegations).
+`results` includes only the result referenced by each delegation's `result_id`:
+
+| Field | Existing timestamps and meaning |
+| --- | --- |
+| `commitToSeen` | `receipts.seen_at − messages.created_at` |
+| `seenToAck` | `receipts.acknowledged_at − receipts.seen_at` |
+| `commitToAck` | `receipts.acknowledged_at − messages.created_at` |
+| `awaitingSeen`, `awaitingAck` | Count, unseen count, oldest result and age since `created_at` |
+
+The commit point is an **approximation**: `messages.created_at` is captured during insertion inside the
+transaction, not at SQLite's actual commit completion. Seen means Agentbus recorded delivery, not that
+a human/model read the output. Ordinary `read` changes nothing; `ack`, `read --ack` and an acknowledging
+reply synthesize seen at ack if previously unseen. Direct ack therefore produces a genuine recorded
+**zero** `seenToAck`, not evidence of immediate cognitive handling.
+
+Each interval returns mutually exclusive counts `measured`, `pending`, `missing`, `settled`, `invalid`,
+plus `minMs`, `meanMs`, `maxMs` over measured samples only. No measured samples means null statistics;
+zero remains numeric zero. Pending means the delivery/acceptance endpoint has not happened yet (both
+seen and ack absent also means pending for `seenToAck`). Missing means a required starting timestamp
+or receipt is unavailable; settled means automatic settlement, whose synthetic timestamps are excluded
+from all latency samples; invalid means malformed or reversed completed timestamps. These are local
+wall-clock measurements: clock adjustments can invalidate latency; backlog ages clamp future timestamps
+to zero. Aggregate means may be fractional milliseconds; no percentiles or time-window telemetry.
+
+`questions` and `followups` each return `{count, unseen, oldest}`. An oldest record contains `messageId`,
+`requestId`, `parentId`, `workerId`, `createdAt`, `ageMs`. Questions are worker questions in **open**
+delegations without a parent reply to that question ID, matching phase derivation; ack alone does not
+answer one. Follow-ups are every parent-to-worker message in an open delegation's correlation except
+the initial request, including answers. Seen-but-unacked follow-ups remain pending. An answer removes
+the question; ack removes its follow-up; result/close removes terminal leftovers from active backlogs.
+
+`watchers` measures **wait arms**, not app heartbeat scheduling. `total` includes ended history; `ended`
+arms are not stale. Each unended arm appears in `items` with scope, correlation, timestamps, age,
+`processLiveness`/`ownerLiveness` (`alive|dead|unknown`), state and independent `expired`/`stale` flags.
+`live`, `dead`, `ownerLost`, `unverified` partition unended arms. Death requires a successful local
+process check proving the recorded PID/start identity absent or replaced. Owner lost means the wait
+itself is alive and at least one recorded ancestor is confirmed dead. Missing identity, no owner evidence
+or a failed process check is unverified, never proof of death. Filtered waits count as live when verified,
+but their `scope` does not promise full delivery coverage; use `delegations`/`explain` for readiness.
+
+`expired` means now reached `expires_at` (no grace); pre-v6 arms fall back to `created_at + MAX_WAIT_MS`
+(24 hours), exposed as `effectiveExpiresAt`. `stale` is the union of expired, dead and owner lost arms,
+**not a dead count**. These counts overlap: an expired arm can still be live or unverified. In contrast,
+return-path readiness allows a 60-second expiry grace. A normal timeout records an ended arm and does
+not prove process death. Heartbeat freshness remains a parent report shown by `delegations`/`explain`.
+
+TSV columns: `snapshot` → timestamp, unit, scope, parent ID; `delegations` → total, without result;
+`latency` → interval, measured, pending, missing, settled, invalid, min, mean, max;
+`backlog` → name, count, unseen, oldest message ID, oldest age;
+`watchers` → total, ended, unended, live, dead, owner lost, unverified, expired, stale.
+Missing TSV values use `-`. JSON watcher items grow with unended waits; retained history is scanned
+locally on demand, without a telemetry service or scheduler.
 
 ### Codex runner events
 

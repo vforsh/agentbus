@@ -86,6 +86,7 @@ export function smoke(binary: string): void {
     run(["doctor"]);
     const parent = `generic:smoke-parent`;
     run(["session", "register", "--provider", "generic", "--external-id", "smoke-parent"]);
+    assert.equal(run(["--as", parent, "metrics"]).results.count, 0, "compiled empty metrics");
     const delegate = (key: string) =>
       run(
         ["--as", parent, "delegate", "--to", "claude", "--cwd", dir, "--key", key, "--file", "-"],
@@ -148,7 +149,13 @@ export function smoke(binary: string): void {
     const inbox = run(["--as", parent, "read"]);
     assert.equal(inbox.messages.length, 1, "result suppresses redundant Stop notice");
     assert.equal(inbox.messages[0].outcome, "success");
+    const pendingMetrics = run(["--as", parent, "metrics"]);
+    assert.equal(pendingMetrics.results.commitToSeen.pending, 1, "metrics do not mark results seen");
+    assert.equal(pendingMetrics.results.awaitingAck.count, 1);
     run(["--as", parent, "ack", inbox.messages[0].id]);
+    const acceptedMetrics = run(["metrics", "--global"]);
+    assert.equal(acceptedMetrics.results.commitToAck.measured, 1, "compiled ack latency");
+    assert.equal(acceptedMetrics.results.seenToAck.minMs, 0, "direct ack records seen at ack");
 
     // The executable must contain its migrations and preserve pending mail during an upgrade.
     env.AGENTBUS_STATE_DIR = join(dir, "legacy");

@@ -70,6 +70,28 @@ Delete only the saved heartbeat after every delegation is closed and outstanding
 | `done` | Worker published a result (outcome shown) | Verify the worker is idle before editing its files |
 | `closed` | Closed by the parent | — |
 
+## Delivery metrics
+
+`agentbus metrics` shows result commit→seen→ack latency (min/mean/max in milliseconds), oldest unanswered
+question, oldest unacknowledged follow-up (including answers), and local wait watcher counts. Add `--json`
+for `data.metricsVersion: 1`, or `--global` for all parents without a caller. Default scope is all retained
+delegations of the caller **as parent**, including history; unrelated inbox mail is excluded.
+
+This command opens the store read-only: no spool drain, seen/ack changes, provider calls or delegation
+updates. `created_at` approximates commit (recorded during insertion); receipts supply seen and ack.
+Ordinary `read` does not mark seen. Direct ack synthesizes seen at ack, so `seenToAck` can genuinely be
+zero. No samples yields null statistics; pending, missing evidence, automatic settlement and invalid
+timestamps have separate counts. Ack alone does not answer a question; seen alone does not handle a
+follow-up. Terminal delegations drop out of active backlogs.
+
+Wait `live|dead|ownerLost|unverified` counts partition unended arms. `expired` independently means the
+recorded deadline passed (legacy fallback 24h); `stale` is the union of expired/dead/owner lost and can
+overlap live or unverified. Timeout alone never proves death. PID/start checks must positively establish
+death; missing/failed checks stay unverified. Ended arms are historical, not stale. Watcher metrics include
+the parent's and its workers' waits; coverage remains in each item's `scope`. Heartbeat reports and
+per-delegation readiness remain in `delegations`/`explain`. See [README](../../README.md#delivery-and-backlog-metrics)
+for exact JSON/TSV definitions and timing limits.
+
 ## As a worker
 
 Your prompt carries an `<agentbus-contract version="1">` block. Follow it exactly. Run every command through the executable it names (`<state-dir>/workers/<worker-id>/agentbus`), which fixes the CLI, store paths and `--as`; it is one path, so keeping it in a shell variable is safe. Never put the multi-word fallback prefix in a variable: zsh and fish do not word-split it (exit 127). In short:
