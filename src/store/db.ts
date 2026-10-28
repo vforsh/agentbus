@@ -10,6 +10,7 @@ import m003 from "./migrations/003_handoff.sql" with { type: "text" };
 import m004 from "./migrations/004_settlement.sql" with { type: "text" };
 import m005 from "./migrations/005_indexes.sql" with { type: "text" };
 import m006 from "./migrations/006_wait_evidence.sql" with { type: "text" };
+import m007 from "./migrations/007_seen_source.sql" with { type: "text" };
 
 export const MIGRATIONS: ReadonlyArray<{ version: number; name: string; sql: string }> = [
   { version: 1, name: "mailbox", sql: m001 },
@@ -18,6 +19,7 @@ export const MIGRATIONS: ReadonlyArray<{ version: number; name: string; sql: str
   { version: 4, name: "settlement", sql: m004 },
   { version: 5, name: "indexes", sql: m005 },
   { version: 6, name: "wait_evidence", sql: m006 },
+  { version: 7, name: "seen_source", sql: m007 },
 ];
 
 export const SCHEMA_VERSION = MIGRATIONS[MIGRATIONS.length - 1]!.version;

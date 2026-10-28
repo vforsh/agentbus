@@ -79,7 +79,9 @@ export function closeDelegation(
     .run(state, outcome, resultId, now, requestId);
   if (res.changes === 0) return false;
   db.query(
-    `UPDATE receipts SET acknowledged_at = $now, seen_at = coalesce(seen_at, $now), settled_reason = $reason
+    `UPDATE receipts SET acknowledged_at = $now,
+       seen_source = CASE WHEN seen_at IS NULL THEN 'settlement' ELSE seen_source END,
+       seen_at = coalesce(seen_at, $now), settled_reason = $reason
      WHERE acknowledged_at IS NULL
        AND message_id IN (SELECT id FROM messages WHERE correlation_id = $request)
        AND ($state = 'closed' OR recipient_id = (SELECT worker_id FROM delegations WHERE request_id = $request))`,

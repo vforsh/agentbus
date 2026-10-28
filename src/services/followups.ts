@@ -46,7 +46,7 @@ export function claimFollowUps(db: Db, provider: string, nativeId: string): Foll
         MessageRow & { worker_id: string; parent_id: string; request_id: string },
         [Record<string, string | number>]
       >(
-        `SELECT m.*, r.seen_at, r.acknowledged_at, r.settled_reason,
+        `SELECT m.*, r.seen_at, r.seen_source, r.acknowledged_at, r.settled_reason,
                   s.id AS worker_id, d.parent_id, d.request_id
            ${PENDING} ORDER BY m.sequence LIMIT $limit`,
       )
@@ -55,6 +55,7 @@ export function claimFollowUps(db: Db, provider: string, nativeId: string): Foll
     markSeen(
       db,
       rows.map((r) => r.id),
+      "doorbell",
     );
     const { worker_id, parent_id, request_id } = rows[0]!;
     return { workerId: worker_id, parentId: parent_id, requestId: request_id, messages: rows };
@@ -69,7 +70,7 @@ export function claimFollowUps(db: Db, provider: string, nativeId: string): Foll
 export function parentMail(db: Db, d: { request_id: string; parent_id: string; worker_id: string }) {
   return db
     .query<MessageRow, [Record<string, string>]>(
-      `SELECT m.*, r.seen_at, r.acknowledged_at, r.settled_reason
+      `SELECT m.*, r.seen_at, r.seen_source, r.acknowledged_at, r.settled_reason
          FROM messages m JOIN receipts r ON r.message_id = m.id
         WHERE m.correlation_id = $request AND m.from_id = $parent AND m.to_id = $worker AND m.type <> 'request'
         ORDER BY m.sequence`,

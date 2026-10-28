@@ -33,6 +33,7 @@ import {
   type Batch,
   getMessage,
   type InboxFilter,
+  markSeen,
   selectInbox,
   toEnvelope,
 } from "../../store/messages.ts";
@@ -100,14 +101,13 @@ function waitHuman(db: Db, result: WaitResult): string {
   return parts.join("\n");
 }
 
-function readBatch(db: Db, filters: InboxFilter, ack: boolean): Batch {
-  if (!ack) return selectInbox(db, filters);
+function readBatch(db: Db, filters: InboxFilter, opts: { ack?: boolean; markSeen?: boolean }): Batch {
+  if (!opts.ack && !opts.markSeen) return selectInbox(db, filters);
   return tx(db, () => {
     const batch = selectInbox(db, filters);
-    acknowledge(
-      db,
-      batch.rows.map((m) => m.id),
-    );
+    const ids = batch.rows.map((m) => m.id);
+    if (opts.markSeen) markSeen(db, ids, "read");
+    else acknowledge(db, ids);
     return { ...batch, rows: batch.rows.map((m) => getMessage(db, m.id)!) };
   });
 }
@@ -348,6 +348,7 @@ export function registerMessaging(program: Command): void {
     .command("read")
     .description("Read the caller's unacknowledged inbox; --ack accepts the returned batch")
     .option("--ack", "acknowledge only the messages returned by this read (after committing, before output)")
+    .option("--mark-seen", "record delivery of the returned page without acknowledging it")
     .option("--all", "history mode: include acknowledged messages")
     .option("--unseen", "only unseen messages")
     .option("--after <seq>", "only messages after this sequence")
@@ -362,6 +363,7 @@ export function registerMessaging(program: Command): void {
           opts: {
             all?: boolean;
             ack?: boolean;
+            markSeen?: boolean;
             unseen?: boolean;
             after?: string;
             from?: string;
@@ -371,6 +373,7 @@ export function registerMessaging(program: Command): void {
           },
         ) => {
           if (opts.all && opts.unseen) throw usageError("--all and --unseen are incompatible");
+          if (opts.ack && opts.markSeen) throw usageError("--ack and --mark-seen are incompatible");
           const db = ctx.db();
           const caller = requireCaller(db, ctx.opts.as);
           const spool = drainBeforeRead(ctx, db);
@@ -385,7 +388,7 @@ export function registerMessaging(program: Command): void {
             correlationIds: opts.correlation ? [opts.correlation] : null,
             limit: parseLimit(opts.limit, DEFAULT_LIMIT, MAX_LIMIT),
           };
-          const batch = readBatch(db, filters, !!opts.ack);
+          const batch = readBatch(db, filters, opts);
           const cursor = batch.rows.length > 0 ? batch.rows[batch.rows.length - 1]!.sequence : after;
           ctx.emit(
             {

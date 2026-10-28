@@ -45,7 +45,7 @@ describe("metrics CLI", () => {
   test("empty, versioned output, caller requirement, global without identity, human and plain", () => {
     const m = metrics();
     expect(m).toMatchObject({
-      metricsVersion: 1,
+      metricsVersion: 2,
       units: "ms",
       scope: { kind: "parent", parentId: parent },
       delegations: { total: 0, withoutResult: 0 },
@@ -57,9 +57,13 @@ describe("metrics CLI", () => {
       missing: 0,
       settled: 0,
       invalid: 0,
+      unobserved: 0,
       minMs: null,
       maxMs: null,
       meanMs: null,
+      p50Ms: null,
+      p90Ms: null,
+      p95Ms: null,
     });
     expect(m.questions).toEqual({ count: 0, unseen: 0, oldest: null });
     expect(m.followups.oldest).toBeNull();

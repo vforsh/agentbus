@@ -9,10 +9,10 @@ Local, durable mailbox between agent sessions. One OS user, one host; identities
 
 ## Core rules
 
-- **Acceptance is explicit.** Default `read`, `show <id>` and `read --unseen` change nothing. `wait` (and the Claude worker doorbell) marks only what it delivers as *seen*. `ack` accepts responsibility; `reply` also acks its source atomically (`--no-ack` opts out). Failed replies do not ack. `read --ack` accepts only its returned page before stdout; use it only when accepting the batch, since lost output still leaves it acknowledged (recover with `read --all` or `show`).
+- **Acceptance is explicit.** Default `read`, `show <id>` and `read --unseen` change nothing. `read --mark-seen`, `wait` and the Claude worker doorbell mark only their delivered page as *seen*, recording its source; this does not prove the output was consumed. `ack` accepts responsibility; `reply` also acks its source atomically (`--no-ack` opts out). Failed replies do not ack. `read --ack` accepts only its returned page before stdout; use it only when accepting the batch, since lost output still leaves it acknowledged (recover with `read --all` or `show`).
 - **Follow-ups gate success.** A worker's `success` result is refused (exit 5, `followups_pending`) while any follow-up or answer from its parent is unacknowledged; seen is not handled. Other outcomes are accepted and list the leftovers as `unhandledFollowUps`.
 - **A delegation's end settles leftovers.** A result settles the worker's unacked mail of that delegation; `close` (never gated) settles the whole delegation, both sides. Settled receipts read as acknowledged with `settledReason` (`delegation_done|delegation_closed`). The result itself stays yours to ack.
-- **Recover on every wake.** At startup and after every wait exit (message, timeout exit 3, error, kill), run a paginated `agentbus read` sweep (follow the More messages pointer with `--after <cursor>`) before handling new output or re-arming. Bodies are readable; `show <id>` prints one full body. Keep `--json` for scripts (`hasMore`/`cursor`). Seen-but-unacked mail may be handled twice; give side effects their own `--key`.
+- **Recover on every wake.** At startup and after every wait exit (message, timeout exit 3, error, kill), run a paginated `agentbus read --mark-seen` sweep (follow the More messages pointer with `--after <cursor>`) before handling new output or re-arming. Bodies are readable; `show <id>` prints one full body. Keep `--json` for scripts (`hasMore`/`cursor`). Seen-but-unacked mail may be handled twice; give side effects their own `--key`.
 - **Retry with keys.** Automated sends/replies/delegations pass a stable `--key`; a retry returns the original IDs, a changed intent fails with exit 5. A keyed `delegate` retry never authorizes a second model launch.
 - **Outcomes come only from `result`.** A finished turn (`notice/turn_finished`) is not success. Only a worker `result` carries `success|blocked|failed|unknown`, and every result closes the delegation.
 - **Unknown stays unknown.** `tracking_lost` / phase `unknown` means evidence is missing, not that the worker stopped. Never take over a worker's files while it is `working`, `unknown` or has background work.
@@ -46,7 +46,7 @@ Readiness is derived from the running watcher, not recorded: `returnPathStatus` 
 
 **Codex parent — heartbeat.** If the app's automation tool exists and monitoring is in scope, create or reuse one heartbeat on the original chat. Persist its ID, original native thread ID, state/config paths and static recovery prompt before ending the turn. Record a heartbeat binding with `status: setup_required` while awaiting its first check-in; creation alone proves configuration, not that a run happened. Reconcile a saved ID through the supported app tool before creating another heartbeat. The observed `view` API renders a card without metadata: a read-only snapshot of its documented automation config can corroborate target, kind, status and prompt, but cannot prove scheduling or restart survival. Never edit app-owned files. Missing/deleted/paused/mismatched evidence means `setup_required` or `unsupported`, not a fresh ready report.
 
-Each run first verifies it is the original chat (`CODEX_THREAD_ID` when available, otherwise supported original-chat evidence; a hardcoded `--as` is not identity evidence), reconciles that same active heartbeat and its target, then records `status: ready` with its ID and cadence on the first successful check-in. Later valid runs use `agentbus session update codex:<thread> --refresh`. Always sweep all unacknowledged mail from the beginning, paginating with a cursor only inside that sweep; `--unseen` or a saved cursor loses recovery mail. Handle and ack questions/results/notices, give side effects their own stable message keys, optionally use a short `wait --timeout 2m`, and stay quiet without meaningful changes. Freshness is a parent report, not app liveness: a check-in older than three intervals (15 minutes without `interval`) reads as `stale`/`unknown`.
+Each run first verifies it is the original chat (`CODEX_THREAD_ID` when available, otherwise supported original-chat evidence; a hardcoded `--as` is not identity evidence), reconciles that same active heartbeat and its target, then records `status: ready` with its ID and cadence on the first successful check-in. Later valid runs use `agentbus session update codex:<thread> --refresh`. Always sweep `agentbus read --mark-seen --json` from the beginning, paginating with a cursor only inside that sweep; `--unseen` or a saved cursor loses recovery mail. Handle and ack questions/results/notices, give side effects their own stable message keys, optionally use a short `wait --timeout 2m`, and stay quiet without meaningful changes. Freshness is a parent report, not app liveness: a check-in older than three intervals (15 minutes without `interval`) reads as `stale`/`unknown`.
 
 Delete only the saved heartbeat after every delegation is closed and outstanding messages/actions are handled. Retain the deletion receipt and immediately record `{"strategy":"heartbeat","status":"setup_required","handle":null}` through `--binding-file -`; repeat cleanup safely after an interruption. Without automation tools, record `"status":"unsupported"`, report manual delivery and poll with `agentbus read`. Local scheduled work needs the app running; missed-run catch-up and restart resumption remain unverified until the opt-in [restart workflow](../../docs/heartbeat-restart.md) has genuinely observed them. A successful CLI/fixture restart does not pass that gate.
 
@@ -72,25 +72,25 @@ Delete only the saved heartbeat after every delegation is closed and outstanding
 
 ## Delivery metrics
 
-`agentbus metrics` shows result commit→seen→ack latency (min/mean/max in milliseconds), oldest unanswered
-question, oldest unacknowledged follow-up (including answers), and local wait watcher counts. Add `--json`
-for `data.metricsVersion: 1`, or `--global` for all parents without a caller. Default scope is all retained
-delegations of the caller **as parent**, including history; unrelated inbox mail is excluded.
+`agentbus metrics --global --since 14d --group-by direction --json` reports a read-only retrospective.
+Bounds select delegations by opening time (`--since` inclusive, `--until` exclusive); their later results
+and answers remain included. ISO timestamps need a timezone; date-only bounds are UTC. `--project`
+selects the worker checkout and descendants; `--direction parent:worker`, `--model`, repeatable
+`--label k=v` intersect filters. Group by `project`, `direction`, `model` or `label:<key>`; absent labels
+form a null group. Task kinds require an explicit label, not inference from names.
 
-This command opens the store read-only: no spool drain, seen/ack changes, provider calls or delegation
-updates. `created_at` approximates commit (recorded during insertion); receipts supply seen and ack.
-Ordinary `read` does not mark seen. Direct ack synthesizes seen at ack, so `seenToAck` can genuinely be
-zero. No samples yields null statistics; pending, missing evidence, automatic settlement and invalid
-timestamps have separate counts. Ack alone does not answer a question; seen alone does not handle a
-follow-up. Terminal delegations drop out of active backlogs.
+`data.metricsVersion: 2`: delegation duration, result publication→seen→ack, delivery-only intervals,
+first-answer latency for questions, p50/p90/p95 (R-7), active backlogs and local wait evidence. Delivery
+sources (`seenSource` in envelopes) distinguish wait/doorbell/`read --mark-seen` from ack-inferred seen.
+Ordinary `read` stays non-mutating. Historical source is unknown; delivery-only intervals count those
+samples as `unobserved`, never zero. Recording delivery before output does not prove consumption.
+Ack alone does not answer a question; terminal settlement is not a handled follow-up or answered question.
 
-Wait `live|dead|ownerLost|unverified` counts partition unended arms. `expired` independently means the
-recorded deadline passed (legacy fallback 24h); `stale` is the union of expired/dead/owner lost and can
-overlap live or unverified. Timeout alone never proves death. PID/start checks must positively establish
-death; missing/failed checks stay unverified. Ended arms are historical, not stale. Watcher metrics include
-the parent's and its workers' waits; coverage remains in each item's `scope`. Heartbeat reports and
-per-delegation readiness remain in `delegations`/`explain`. See [README](../../README.md#delivery-and-backlog-metrics)
-for exact JSON/TSV definitions and timing limits.
+The report never drains hooks, changes receipts or probes providers. Default scope is all retained
+children of the caller as parent; `--global` needs no caller. Filtered watcher counts cover waits matching
+and overlapping the selected cohort; broad waits count once. Liveness requires PID/start evidence;
+expiry alone never proves death. Heartbeat freshness/readiness remain in `delegations`/`explain`.
+See [README](../../README.md#delivery-and-backlog-metrics) for field and TSV definitions.
 
 ## As a worker
 

@@ -170,11 +170,16 @@ export async function runWait(
       });
       if (!snapshot) {
         if (unseen.rows.length === 0) return null;
-        markSeen(
+        const seenAt = markSeen(
           db,
           unseen.rows.map((r) => r.id),
         );
-        return { rows: unseen.rows, hasMore: unseen.hasMore, reason: "messages" as const, batch: null };
+        return {
+          rows: unseen.rows.map((r) => ({ ...r, seen_at: seenAt, seen_source: "wait" as const })),
+          hasMore: unseen.hasMore,
+          reason: "messages" as const,
+          batch: null,
+        };
       }
       const attention = unseen.rows.filter(isAttention);
       const table = batchTable(db, snapshot);
@@ -184,11 +189,16 @@ export async function runWait(
       if (!reason) return null;
       const ordered = [...attention, ...unseen.rows.filter((r) => !isAttention(r))];
       const b = budget(ordered, opts.limit);
-      markSeen(
+      const seenAt = markSeen(
         db,
         b.rows.map((r) => r.id),
       );
-      return { rows: b.rows, hasMore: b.hasMore || unseen.hasMore, reason, batch: table.members };
+      return {
+        rows: b.rows.map((r) => ({ ...r, seen_at: seenAt, seen_source: "wait" as const })),
+        hasMore: b.hasMore || unseen.hasMore,
+        reason,
+        batch: table.members,
+      };
     });
     if (!picked) return null;
     hooks.afterSeenCommit?.();

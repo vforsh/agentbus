@@ -163,12 +163,14 @@ describe("offline upgrade refusals and rollback", () => {
     const f = fixture();
     f.legacy();
     const db = new Database(f.dbPath);
-    db.run("ALTER TABLE wait_arms ADD COLUMN scope TEXT");
+    // Fail the transaction independently of its DDL, so this fixture survives new schema versions.
+    db.run(`CREATE TRIGGER fail_migration BEFORE INSERT ON schema_migrations
+      BEGIN SELECT RAISE(ABORT, 'injected migration failure'); END`);
     db.close();
     const before = readFileSync(f.dbPath);
     const r = f.release();
     expect(r.exitCode).toBe(1);
-    expect(r.stderr.toString()).toContain("duplicate column");
+    expect(r.stderr.toString()).toContain("injected migration failure");
     expect(schema(f.dbPath)).toBe(SCHEMA_VERSION - 1);
     expect(readFileSync(f.dbPath)).toEqual(before);
     expect(readFileSync(f.target, "utf8")).toContain("old executable");

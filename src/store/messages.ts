@@ -6,6 +6,7 @@ import {
   type MessageType,
   type NoticeMeta,
   type Outcome,
+  type SeenSource,
   type SettledReason,
 } from "../protocol/types.ts";
 import { newId, nowIso } from "../util/misc.ts";
@@ -29,6 +30,7 @@ export interface MessageRow {
   notice: string | null;
   turn_ref: string | null;
   seen_at?: string | null;
+  seen_source?: SeenSource | null;
   acknowledged_at?: string | null;
   settled_reason?: SettledReason | null;
 }
@@ -57,12 +59,13 @@ export function toEnvelope(row: MessageRow): Envelope {
     notice: row.notice ? (JSON.parse(row.notice) as NoticeMeta) : null,
     turnRef: row.turn_ref,
     seenAt: row.seen_at ?? null,
+    seenSource: row.seen_source ?? null,
     acknowledgedAt: row.acknowledged_at ?? null,
     settledReason: row.settled_reason ?? null,
   };
 }
 
-const SELECT_WITH_RECEIPT = `SELECT m.*, r.seen_at, r.acknowledged_at, r.settled_reason FROM messages m JOIN receipts r ON r.message_id = m.id`;
+const SELECT_WITH_RECEIPT = `SELECT m.*, r.seen_at, r.seen_source, r.acknowledged_at, r.settled_reason FROM messages m JOIN receipts r ON r.message_id = m.id`;
 
 export function getMessage(db: Db, id: string): MessageRow | null {
   return db.query<MessageRow, [string]>(`${SELECT_WITH_RECEIPT} WHERE m.id = ?`).get(id);
@@ -189,10 +192,12 @@ export function budget(all: MessageRow[], limit: number): Batch {
   return { rows, hasMore: false };
 }
 
-export function markSeen(db: Db, ids: string[]): string {
+export function markSeen(db: Db, ids: string[], source: "wait" | "doorbell" | "read" = "wait"): string {
   const now = nowIso();
-  const stmt = db.query("UPDATE receipts SET seen_at = ? WHERE message_id = ? AND seen_at IS NULL");
-  for (const id of ids) stmt.run(now, id);
+  const stmt = db.query(
+    "UPDATE receipts SET seen_at = ?, seen_source = ? WHERE message_id = ? AND seen_at IS NULL",
+  );
+  for (const id of ids) stmt.run(now, source, id);
   return now;
 }
 
@@ -200,7 +205,9 @@ export function acknowledge(db: Db, ids: string[]): { newlyAcknowledged: string[
   const now = nowIso();
   const newly: string[] = [];
   const stmt = db.query(
-    "UPDATE receipts SET acknowledged_at = ?, seen_at = coalesce(seen_at, ?) WHERE message_id = ? AND acknowledged_at IS NULL",
+    `UPDATE receipts SET acknowledged_at = ?,
+       seen_source = CASE WHEN seen_at IS NULL THEN 'ack' ELSE seen_source END,
+       seen_at = coalesce(seen_at, ?) WHERE message_id = ? AND acknowledged_at IS NULL`,
   );
   for (const id of ids) {
     const res = stmt.run(now, now, id);

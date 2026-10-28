@@ -189,6 +189,7 @@ Each recipient message moves through three states: **unseen**, **seen** and **ac
 
 - `wait` returns unseen, unacknowledged messages matching its filters and marks them seen in the same transaction that selects them, then prints them. A re-armed wait therefore returns only unseen work, without a client-side cursor. The recovery loop below handles the gap between committing seen state and delivering stdout.
 - `read` returns unacknowledged messages by default without changing receipts. `read --unseen` is also non-mutating and filters to unseen, unacknowledged messages. `--all` is history mode, incompatible with `--unseen`.
+- `read --mark-seen` explicitly marks only its selected page seen before stdout, with source `read`, without acknowledgement; it is incompatible with `--ack`. Other reads remain non-mutating.
 - `ack` means the receiving workflow accepted responsibility; it also sets `seenAt` if needed so an acknowledged message cannot wake a waiter.
 - `reply` acknowledges the source in the same transaction unless `--no-ack`; validation failures leave it pending. A keyed retry may acknowledge its source without duplicating the reply. `read --ack` explicitly accepts only its selected page before stdout; lost output does not undo acceptance, so its bodies are recovered with `show` or `read --all`.
 
@@ -285,7 +286,7 @@ Tables by milestone:
 | `schema_migrations` | 2 | Applied migration versions |
 | `sessions` | 2 | Provider identities, pending state, labels, project paths and adapter bindings; seeded with `system:observer` |
 | `messages` | 2 | Immutable payloads, summaries and correlation links |
-| `receipts` | 2 | Per-recipient seen and acknowledged timestamps; one row per message |
+| `receipts` | 2, 7 | Per-recipient seen/acknowledged timestamps and first-seen provenance; one row per message |
 | `delegations` | 2 | Parent/worker binding, original contract/version and request retry hash, open or closed state |
 | `turn_bindings` | 3 | Durable run/prompt identities, binding generations and background-task continuation provenance |
 | `observations` | 3 | Normalized provider evidence, stable captured-event IDs and optional native occurrence keys |
@@ -791,3 +792,12 @@ Failed checks block the corresponding automatic delivery claim; they are not sil
 - Can a supported endpoint reach the Desktop chat's owning backend, and what receipt does it expose? The 2026-10-06 spike failed at transport connection; active/idle delivery and dispatch receipts remain unverified. Can background-terminal completion supply a wake path instead? (6)
 
 Resolved by design: explicit contract and continuation provenance bind Claude turns; durable run IDs bind Codex runs; seen state plus unconditional recovery reads support re-arming; rollback journal remains the default. None of these substitutes for the live provider gates.
+
+## Retrospective metrics (2026-10-28)
+
+Schema 7 records first-seen provenance without guessing historical sources. Explicit `read --mark-seen`
+marks only its delivered page, never acknowledges it; ordinary read remains non-mutating. Metrics v2
+select delegation cohorts by opening-time bounds, project, direction and worker labels, with grouped
+aggregates, R-7 percentiles, duration and first-question-answer latency. Delivery-only intervals exclude
+ack-inferred and historical unknown seen; compatibility seen intervals retain the recorded timestamps.
+README defines cohort/timezone/watcher semantics and the versioned output fields.
