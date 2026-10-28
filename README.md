@@ -189,6 +189,20 @@ The companion `claude-threads` launcher provides `cleanup.sh cancel <name|reques
 - **Observation**: Claude hooks and Codex runner events become turn bindings and observations. `turn_finished` notices are suppressed when that exact turn produced a question or result. Task notifications continue a delegated Claude turn only with proven provenance: a verified wait arm recorded by `agentbus wait` inside that turn, or a background task first seen in that turn's Stop inventory against a known baseline. Anything else supersedes the binding (phase `unknown`, `tracking_lost` notice).
 - **Ordering**: hook events of one session commit in capture order. While any event of that session sits in the spool, later events drain it first or queue behind it; a delayed prompt or Stop never rebinds or overwrites a newer turn. Permission and failure events are posted only when attributable to a bound turn.
 
+### Returning delegated work
+
+A consultation, review, draft or implementation request defaults to returning the verified result in the
+original chat, even when a separate session is requested. A launch receipt is only progress. Codex parents
+keep the current turn open with a recovery `read --mark-seen --json` sweep and bounded foreground
+`wait --replace --timeout 60s --probe 60s --json`; continue the same tool process, handle questions and
+ack handled mail before re-arming. Timeout never means completion or changes the return mode. Claude
+parents use one background wait and handle the delivered questions/results on wake.
+
+Use a heartbeat when the user requests background work with a later return; set it up before ending
+the turn. Launch-only/continue-there is explicit handoff, with no promise of a later reply here. The CLI
+cannot itself create an app heartbeat or consume an agent's result: supported launchers and their skills
+own this loop. Missing wake support must be reported, never silently treated as successful setup.
+
 ### Delivery and backlog metrics
 
 ```bash

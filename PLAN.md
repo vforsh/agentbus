@@ -793,6 +793,13 @@ Failed checks block the corresponding automatic delivery claim; they are not sil
 
 Resolved by design: explicit contract and continuation provenance bind Claude turns; durable run IDs bind Codex runs; seen state plus unconditional recovery reads support re-arming; rollback journal remains the default. None of these substitutes for the live provider gates.
 
+## Delegation return workflow (2026-10-28)
+
+Requested deliverables default to returning in the original chat; a new worker session alone does not
+select handoff. Codex await uses the existing bounded in-turn wait/recovery loop. Notify requires a
+supported wake path before ending the turn; launch-only handoff is explicit. Launcher skills own this
+workflow; no new daemon, scheduler or launch protocol is needed.
+
 ## Retrospective metrics (2026-10-28)
 
 Schema 7 records first-seen provenance without guessing historical sources. Explicit `read --mark-seen`

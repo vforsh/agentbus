@@ -24,6 +24,22 @@ Caller resolution: `--as <address>` → `AGENTBUS_SESSION_ID` → native `CLAUDE
 
 ## As a parent
 
+**Own the return, not just the launch.** Infer the mode from the requested deliverable:
+
+- **Await (default for a consultation, review, draft or implementation):** bring the verified result back
+  here, even when it runs in a new session. A launch receipt is progress, not completion.
+- **Notify:** background work with a later return. Establish the supported wake path before ending the
+  turn; reuse the existing watcher/heartbeat. If unavailable, keep waiting in-turn or report the limitation.
+- **Handoff:** the user explicitly wants only a launched session or to continue there. Report access and
+  ownership; do not promise a later answer here. A new session alone does not cancel a requested answer.
+
+For a Codex parent's await mode, sweep `agentbus read --mark-seen --json`, handle/ack mail, then run
+`agentbus wait --replace --timeout 60s --probe 60s --json` while the requested work remains open. Continue
+the same tool process in bounded calls, recovering after every exit and paginating each sweep. Keep the
+turn open; a timeout never changes await into handoff or schedules a wake. Questions need a reply, not
+just ack; `turn_finished` is not a result. Verify/integrate the deliverable before the final answer.
+The heartbeat workflow below is for notify mode; a Claude parent uses its background wait for return.
+
 ```bash
 agentbus init --json                                         # once per machine; idempotent
 agentbus session register --provider claude --external-id "$CLAUDE_CODE_SESSION_ID" --name lead --json
@@ -44,7 +60,7 @@ It covers every delegation of this parent, including ones created later. On each
 
 Readiness is derived from the running watcher, not recorded: `returnPathStatus` is `ready` (`returnReadiness.readiness: armed`) only while an unfiltered wait of yours is running and the process that armed it still exists. `not_armed` (timed out, returned, interrupted, killed), `owner_lost` (the wait outlived the session that armed it; `--replace` retires it) and `unverified`/`unknown` (no process evidence) all mean re-arm before relying on wake-ups. A `--correlation` wait covers one request, a `--settled` wait only the delegations open when armed, and a `--from`/`--type` wait none.
 
-**Codex parent — heartbeat.** If the app's automation tool exists and monitoring is in scope, create or reuse one heartbeat on the original chat. Persist its ID, original native thread ID, state/config paths and static recovery prompt before ending the turn. Record a heartbeat binding with `status: setup_required` while awaiting its first check-in; creation alone proves configuration, not that a run happened. Reconcile a saved ID through the supported app tool before creating another heartbeat. The observed `view` API renders a card without metadata: a read-only snapshot of its documented automation config can corroborate target, kind, status and prompt, but cannot prove scheduling or restart survival. Never edit app-owned files. Missing/deleted/paused/mismatched evidence means `setup_required` or `unsupported`, not a fresh ready report.
+**Codex parent — heartbeat (notify mode).** If the app's automation tool exists and monitoring is in scope, create or reuse one heartbeat on the original chat. Persist its ID, original native thread ID, state/config paths and static recovery prompt before ending the turn. Record a heartbeat binding with `status: setup_required` while awaiting its first check-in; creation alone proves configuration, not that a run happened. Reconcile a saved ID through the supported app tool before creating another heartbeat. The observed `view` API renders a card without metadata: a read-only snapshot of its documented automation config can corroborate target, kind, status and prompt, but cannot prove scheduling or restart survival. Never edit app-owned files. Missing/deleted/paused/mismatched evidence means `setup_required` or `unsupported`, not a fresh ready report.
 
 Each run first verifies it is the original chat (`CODEX_THREAD_ID` when available, otherwise supported original-chat evidence; a hardcoded `--as` is not identity evidence), reconciles that same active heartbeat and its target, then records `status: ready` with its ID and cadence on the first successful check-in. Later valid runs use `agentbus session update codex:<thread> --refresh`. Always sweep `agentbus read --mark-seen --json` from the beginning, paginating with a cursor only inside that sweep; `--unseen` or a saved cursor loses recovery mail. Handle and ack questions/results/notices, give side effects their own stable message keys, optionally use a short `wait --timeout 2m`, and stay quiet without meaningful changes. Freshness is a parent report, not app liveness: a check-in older than three intervals (15 minutes without `interval`) reads as `stale`/`unknown`.
 
