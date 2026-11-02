@@ -12,6 +12,7 @@ import { registerMetrics } from "./commands/metrics.ts";
 import { registerPrune } from "./commands/prune.ts";
 import { registerInit, registerSessionCommands, registerWhoami } from "./commands/session.ts";
 import { registerStatus } from "./commands/status.ts";
+import { registerTake } from "./commands/take.ts";
 
 export const VERSION = pkg.version;
 
@@ -43,6 +44,7 @@ export function buildProgram(opts: { quietErrors?: boolean } = {}): Command {
   registerSessionCommands(program);
   registerDelegate(program);
   registerMessaging(program);
+  registerTake(program);
   registerStatus(program);
   registerMetrics(program);
   registerExplain(program);
@@ -54,5 +56,34 @@ export function buildProgram(opts: { quietErrors?: boolean } = {}): Command {
   registerBuildInfo(program);
   registerSkill(program);
   registerCompletion(program);
+  hintForeignOptions(program);
   return program;
+}
+
+function walk(cmd: Command): Command[] {
+  return [cmd, ...cmd.commands.flatMap(walk)];
+}
+
+const path = (cmd: Command): string => (cmd.parent ? `${path(cmd.parent)} ${cmd.name()}` : cmd.name());
+
+/**
+ * An unknown option that another command accepts (`read --timeout`) names that command, since agents often
+ * carry flags over from a neighbouring command. Commander's own near-miss suggestion still applies otherwise.
+ */
+function hintForeignOptions(program: Command): void {
+  const all = walk(program);
+  for (const cmd of all) {
+    const own = cmd as unknown as { unknownOption(flag: string): void };
+    const original = own.unknownOption.bind(cmd);
+    own.unknownOption = (flag: string) => {
+      const long = flag.split("=")[0]!;
+      const owners = all.filter((c) => c !== cmd && c.parent && c.options.some((o) => o.long === long));
+      if (owners.length === 0 || (cmd as unknown as { _allowUnknownOption: boolean })._allowUnknownOption)
+        return original(flag);
+      const names = owners.map((c) => `\`${path(c)}\``).join(", ");
+      cmd.error(`error: unknown option '${flag}' for \`${path(cmd)}\`; it is an option of ${names}`, {
+        code: "commander.unknownOption",
+      });
+    };
+  }
 }

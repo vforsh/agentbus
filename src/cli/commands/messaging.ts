@@ -24,7 +24,7 @@ import {
   sendMessage,
 } from "../../services/mailbox.ts";
 import { derivePhase } from "../../services/phase.ts";
-import { returnPathResolver } from "../../services/returnpath.ts";
+import { returnPathResolver, returnReadiness } from "../../services/returnpath.ts";
 import { runWait, type WaitResult } from "../../services/wait.ts";
 import { type Db, tx } from "../../store/db.ts";
 import { getDelegation, latestDelegationBetween } from "../../store/delegations.ts";
@@ -414,6 +414,10 @@ export function registerMessaging(program: Command): void {
     .option("--settled", "batch mode: return on attention events or when every captured delegation settles")
     .option("--probe <interval>", "probe open delegations' liveness at this interval (at least 10s)")
     .option("--replace", "retire the caller's other running waits, which exit with reason superseded")
+    .option(
+      "--ensure",
+      "return at once (reason already_watched) when a live wait of this session already covers its mail; otherwise wait",
+    )
     .option("--after <seq>", "only messages after this sequence")
     .option("--from <address>", "only messages from this sender")
     .option("--type <type>", "only this message type")
@@ -428,6 +432,7 @@ export function registerMessaging(program: Command): void {
             settled?: boolean;
             probe?: string;
             replace?: boolean;
+            ensure?: boolean;
             after?: string;
             from?: string;
             type?: string;
@@ -442,14 +447,41 @@ export function registerMessaging(program: Command): void {
           if (opts.settled && (opts.after || opts.from || opts.type)) {
             throw usageError("--settled cannot be combined with --after, --from or --type");
           }
+          if (opts.ensure && (opts.replace || opts.settled || opts.from || opts.type)) {
+            throw usageError("--ensure cannot be combined with --replace, --settled, --from or --type");
+          }
           const db = ctx.db();
           const caller = requireCaller(db, ctx.opts.as);
+          const after = parseSequence(opts.after, "--after");
+          if (opts.ensure) {
+            // Another live wait (an owning mod, an earlier background wait) already wakes this session.
+            const d = opts.correlation ? getDelegation(db, opts.correlation) : null;
+            const ready = returnReadiness(db, caller.session.id, d);
+            if (ready?.readiness === "armed") {
+              ctx.emit(
+                {
+                  origin: null,
+                  messages: [],
+                  cursor: after,
+                  hasMore: false,
+                  timedOut: false,
+                  reason: "already_watched",
+                  batch: null,
+                  replaced: 0,
+                  watcher: ready.watcher,
+                  recovery: "a live wait already covers this session; end the turn, it wakes you",
+                },
+                () => `Already watched: ${ready.reason}. End the turn; that wait wakes you.`,
+                () => "",
+              );
+              return;
+            }
+          }
           const fault = process.env.AGENTBUS_FAULT_INJECT === "wait-after-seen-commit";
           let armId: string | null = null;
           const release = onInterrupt(() => {
             if (armId) endWaitArm(db, armId, "interrupted");
           });
-          const after = parseSequence(opts.after, "--after");
           const result = await runWait(
             db,
             ctx.paths,
@@ -489,12 +521,12 @@ export function registerMessaging(program: Command): void {
               recovery:
                 result.reason === "superseded"
                   ? "a newer wait of this session is running; do not re-arm"
-                  : "run a paginated `agentbus read` sweep before re-arming",
+                  : "run `agentbus take` (or a paginated `agentbus read` sweep) before re-arming",
             },
             () =>
               result.timedOut
                 ? pc.dim(
-                    "Timed out with no new messages; run `agentbus read` to recover pending mail before re-arming.",
+                    "Timed out with no new messages; run `agentbus take` (or `agentbus read`) to recover pending mail before re-arming.",
                   )
                 : waitHuman(db, result),
             () => messagesPlain(result.rows),
