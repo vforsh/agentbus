@@ -4,6 +4,10 @@ Durable local mailbox and delegation bus between Codex and Claude Code sessions.
 
 Design and rationale: [PLAN.md](PLAN.md). Agent-facing usage: [skill/agentbus/SKILL.md](skill/agentbus/SKILL.md).
 
+Captured fixtures and historical evidence use synthetic session, chat and automation identifiers and generic filesystem paths. Unrelated chat details and the raw spike log are omitted from the published history; recorded event shapes and technical findings are preserved.
+
+Licensed under the [MIT License](LICENSE).
+
 ## Status
 
 | Milestone | State |

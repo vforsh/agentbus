@@ -16,9 +16,9 @@ Deliver in order of certainty: durable messaging, then worker result capture, th
 
 | Decision | Initial implementation |
 | --- | --- |
-| Directory | `~/dev/agentbus`; `~/dev` is a symlink to `/workspace` |
+| Directory | `~/dev/agentbus` (or another local checkout) |
 | Command | `agentbus` |
-| Package | `@vforsh/agentbus` (free on npm as of 2026-09-30); repository `vforsh/agentbus`, private |
+| Package | `@vforsh/agentbus` (free on npm as of 2026-09-30); public repository `vforsh/agentbus`, MIT licensed |
 | Runtime | Latest stable Bun at implementation time, latest stable TypeScript; Bun tooling throughout |
 | Dependencies | Commander for arguments, Zod for boundary validation, Picocolors for human output |
 | Storage | SQLite through `bun:sqlite`, rollback journal; SQL migrations and prepared statements |

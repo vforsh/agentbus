@@ -1,5 +1,7 @@
 # Codex wake capability spike — 2026-10-06
 
+Privacy: identifiers are synthetic and paths are generic.
+
 **Decision: the backend-reachability gate failed on this host. Keep the heartbeat as the supported Codex parent return path; do not implement the wake worker yet.**
 
 This is evidence about the observed Desktop configuration, not a claim that every Codex installation lacks native wake support. Raw command receipts and process evidence are in [codex-wake-2026-10-06.json](codex-wake-2026-10-06.json).

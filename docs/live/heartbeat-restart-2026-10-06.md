@@ -1,5 +1,7 @@
 # Codex heartbeat restart evidence — 2026-10-06
 
+Privacy: identifiers are synthetic and paths are generic. Unrelated chat identifiers and titles are omitted.
+
 **Live restart acceptance: NOT RUN.** An unrelated local chat was active. The app was not restarted, so automatic resumption, pending-result recovery after reopening and post-restart final cleanup have not passed. The preflight and process checks below must not be promoted to a live restart result.
 
 Task-relevant receipts and timestamps: [JSON evidence](heartbeat-restart-2026-10-06.json). Repeatable procedure: [restart workflow](../heartbeat-restart.md). Private raw receipts, the full saved continuation and mailbox history are retained in `/Users/example/.local/state/agentbus-experiments/heartbeat-restart-2026-10-06-f0000011-v2/`; the first discovery run is in the adjacent directory without `-v2`. Both disposable heartbeats were deleted through the supported API and both stores are marked `aborted`. No monitor remains armed by this task.
