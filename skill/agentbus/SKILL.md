@@ -108,7 +108,7 @@ The report never drains hooks, changes receipts or probes providers. Default sco
 children of the caller as parent; `--global` needs no caller. Filtered watcher counts cover waits matching
 and overlapping the selected cohort; broad waits count once. Liveness requires PID/start evidence;
 expiry alone never proves death. Heartbeat freshness/readiness remain in `delegations`/`explain`.
-See [README](../../README.md#delivery-and-backlog-metrics) for field and TSV definitions.
+See [docs/metrics.md](../../docs/metrics.md) for field and TSV definitions.
 
 ## As a worker
 
@@ -123,8 +123,8 @@ Your prompt carries an `<agentbus-contract version="1">` block. Follow it exactl
 
 ## Setup and diagnostics
 
-- Install/upgrade the worker-facing executable from the checkout with `bun run upgrade` (`install:bin` is an alias). It builds and smoke-tests a compiled candidate, backs up/migrates the selected store and replaces the executable. Run offline: stop Agentbus users and watchers first; open delegations, live/unverified waits, queued hook events and newer schemas are refused. Only the selected store is checked. Do not close real work to bypass this gate. Background Claude sessions may be unable to read external volumes, so keep the executable on the internal disk.
-- `bun run gate` includes the compiled release checks; `bun run release:check` only builds and smoke-tests without installing or launching models. `agentbus build-info --json` reports embedded commit, source fingerprint and supported schema. Backups and interrupted-upgrade recovery are documented in README.md.
+- Install/upgrade the worker-facing executable with `agentbus upgrade` from the npm package, or `bun run upgrade` from a checkout (`install:bin` is an alias). It builds and smoke-tests a compiled candidate, backs up/migrates the selected store and replaces the executable. Run offline: stop Agentbus users and watchers first; open delegations, live/unverified waits, queued hook events and newer schemas are refused. Only the selected store is checked. Do not close real work to bypass this gate. Background Claude sessions may be unable to read external volumes, so keep the executable on the internal disk.
+- `bun run gate` includes the compiled release checks; `bun run release:check` only builds and smoke-tests without installing or launching models. `agentbus build-info --json` reports embedded commit, source fingerprint and supported schema. Backups and interrupted-upgrade recovery are documented in docs/install.md.
 - `agentbus doctor` — read-only readiness (build identity/source freshness, store schema, spool backlog, hook installation and pinned store, provider CLIs, caller, and the caller's return path for its open delegations).
 - Claude workers are observed through per-worker hooks: start them with `claude --bg --settings <claudeSettings>` from the `delegate` receipt. The same hooks ring the follow-up doorbell (`PostToolUse`, `Stop`). After a Desktop handoff only explicit replies and `--probe` remain. `agentbus hooks claude install|uninstall|status|print [--dry-run]` manages an optional user-level install that also covers handed-off sessions but runs in every Claude session.
 - `agentbus config set codexBin=/path claudeBin=/path`, `config get|unset|import|export|path|ls`.

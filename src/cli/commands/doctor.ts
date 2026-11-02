@@ -171,7 +171,7 @@ function runChecks(opts: { config?: string; stateDir?: string; as?: string }): C
       "worker_cli",
       "warn",
       `workers run ${external}, on an external volume`,
-      "run `bun run upgrade` in the checkout",
+      "run `agentbus upgrade` (or `bun run upgrade` in a checkout)",
     );
   } else if (paths.cliArgv?.length === 1) {
     const binary = paths.cliArgv[0]!;
@@ -184,7 +184,7 @@ function runChecks(opts: { config?: string; stateDir?: string; as?: string }): C
         "worker_cli",
         "warn",
         `workers run ${binary}; build identity unavailable`,
-        "run `bun run upgrade` to install an identifiable build",
+        "run `agentbus upgrade` to install an identifiable build",
       );
     } else {
       // A source invocation compares against its own checkout; a standalone executable can inspect
@@ -200,7 +200,7 @@ function runChecks(opts: { config?: string; stateDir?: string; as?: string }): C
         !compatible ? "fail" : freshness === "current" ? "ok" : "warn",
         `workers run ${binary}; commit ${identity.commit ?? "unknown"}; source ${identity.sourceHash}; schema v${identity.schemaVersion}; checkout ${freshness}`,
         !compatible || freshness === "stale"
-          ? "run `bun run upgrade` in the intended checkout"
+          ? "run `agentbus upgrade` from the intended package or checkout"
           : freshness === "unavailable"
             ? "checkout unavailable; build identity is recorded, freshness cannot be checked"
             : undefined,

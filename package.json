@@ -1,21 +1,41 @@
 {
   "name": "@vforsh/agentbus",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Durable local mailbox and delegation bus between Codex and Claude Code sessions",
   "type": "module",
-  "private": true,
   "license": "MIT",
+  "author": "Vladislav Forsh",
+  "homepage": "https://github.com/vforsh/agentbus#readme",
+  "bugs": {
+    "url": "https://github.com/vforsh/agentbus/issues"
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/vforsh/agentbus.git"
   },
+  "keywords": [
+    "agents",
+    "claude-code",
+    "codex",
+    "delegation",
+    "mailbox",
+    "cli",
+    "bun"
+  ],
   "bin": {
     "agentbus": "bin/agentbus"
   },
   "files": [
     "bin",
     "src",
+    "scripts/build.ts",
+    "scripts/release.ts",
+    "scripts/smoke.ts",
+    "scripts/upgrade.ts",
     "skill",
+    "docs/*.md",
+    "tsconfig.json",
+    "bun.lock",
     "README.md"
   ],
   "packageManager": "bun@1.4.2",
@@ -44,5 +64,8 @@
     "@biomejs/biome": "2.5.15",
     "@types/bun": "1.4.2",
     "typescript": "7.0.2"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }

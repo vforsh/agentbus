@@ -1,6 +1,8 @@
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import type { Command, Option } from "commander";
 import { buildInfo } from "../../build-info.ts";
-import { usageError } from "../../errors.ts";
+import { failure, usageError } from "../../errors.ts";
 import { action } from "../action.ts";
 
 export const SKILL_URL = "https://github.com/vforsh/agentbus/tree/main/skill/agentbus";
@@ -17,6 +19,33 @@ export function registerBuildInfo(program: Command): void {
           () =>
             `${info.version} ${info.compiled ? "compiled" : "source"}\ncommit ${info.commit ?? "unknown"}${info.dirty ? " (dirty)" : ""}\nsource ${info.sourceHash}\nschema ${info.schemaVersion}\nbuilt  ${info.builtAt ?? "not compiled"}\nbun    ${info.bunVersion}`,
         );
+      }),
+    );
+}
+
+/** Runs the package's release script, so an npm install can build and install the executable workers run. */
+export function registerUpgrade(program: Command): void {
+  program
+    .command("upgrade")
+    .description(
+      "Build, smoke-test and install the standalone executable workers run (offline: stop workers and waits first)",
+    )
+    .action(
+      action((ctx) => {
+        const info = buildInfo();
+        const script = join(info.sourceRoot, "scripts", "release.ts");
+        if (info.compiled || !existsSync(script))
+          throw usageError("upgrade runs from the npm package or a checkout, not the installed executable", {
+            hint: "run the package's agentbus (bun add -g @vforsh/agentbus), or `bun run upgrade` in a checkout",
+          });
+        const args = [process.execPath, script, "upgrade"];
+        if (ctx.opts.stateDir) args.push("--state-dir", ctx.opts.stateDir);
+        if (ctx.opts.config) args.push("--config", ctx.opts.config);
+        const r = Bun.spawnSync(args, { cwd: info.sourceRoot, stdout: "pipe", stderr: "inherit" });
+        if (r.exitCode !== 0)
+          throw failure("upgrade_failed", "upgrade refused or failed; see the message above");
+        const result = JSON.parse(r.stdout.toString()) as { target: string; build: { version: string } };
+        ctx.emit(result, () => `installed ${result.build.version} at ${result.target}`);
       }),
     );
 }
