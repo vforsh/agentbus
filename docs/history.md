@@ -5,7 +5,7 @@ Completed milestone task lists, resolved questions, recorded evidence and the re
 
 ## Completed milestones
 
-Task lists and exit conditions as planned. Live gate results are in [Pre-implementation evidence](#pre-implementation-evidence) and the README's Live checks.
+Task lists and exit conditions as planned. Live gate results are in [Pre-implementation evidence](#pre-implementation-evidence) and [Verification: Live checks](verification.md#live-checks).
 
 ### 1. Scaffold and contracts
 

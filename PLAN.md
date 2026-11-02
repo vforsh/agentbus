@@ -671,7 +671,7 @@ scripts/
 skill/agentbus/SKILL.md
 README.md
 PLAN.md
-docs/history.md
+docs/               # cli, protocol, install, metrics, verification, history
 package.json
 tsconfig.json
 bun.lock
@@ -683,9 +683,9 @@ Use a Bun entrypoint, package `bin` mapping, strict TypeScript and current compa
 
 ### Bun version policy
 
-Use the latest stable Bun from the official release feed, never canary. The baseline is `1.4.2` (`packageManager: bun@1.4.2`, `engines.bun: >=1.4.2`; README records the revision). [Official Bun release](https://github.com/oven-sh/bun/releases/tag/bun-v1.4.2).
+Use the latest stable Bun from the official release feed, never canary. The baseline is `1.4.2` (`packageManager: bun@1.4.2`, `engines.bun: >=1.4.2`; docs/install.md records the revision). [Official Bun release](https://github.com/oven-sh/bun/releases/tag/bun-v1.4.2).
 
-On an upgrade, update Bun through its existing installation method, record `bun --version` and `bun --revision`, update `packageManager`, CI, `engines.bun` and README together, and verify the SQLite version separately (see [Journal mode decision](#journal-mode-decision)).
+On an upgrade, update Bun through its existing installation method, record `bun --version` and `bun --revision`, update `packageManager`, CI, `engines.bun` and docs/install.md together, and verify the SQLite version separately (see [Journal mode decision](#journal-mode-decision)).
 
 ## Implementation milestones
 
@@ -776,7 +776,7 @@ Use disposable provider sessions for live adapter checks. Collect the native IDs
 
 ### Verified local installation
 
-`bun run release:check` builds and smoke-tests without installing. `bun run upgrade` (also `install:bin`) builds a candidate, runs the same compiled smoke, then checks/migrates the selected store under an exclusive SQLite transaction and atomically replaces the executable. Open delegations, live/unverifiable waits, pending spool events, newer schemas and contention are refusals. Existing binaries and mailbox snapshots are retained as private backups. Ordinary failures restore the executable and roll back migration; an interrupted upgrade leaves a journal/lock for inspection. This is an offline operation: callers must stop users of every store sharing the executable. SQLite and a filesystem rename are not one crash-atomic commit; see README.md for recovery.
+`bun run release:check` builds and smoke-tests without installing. `bun run upgrade` (also `install:bin`) builds a candidate, runs the same compiled smoke, then checks/migrates the selected store under an exclusive SQLite transaction and atomically replaces the executable. Open delegations, live/unverifiable waits, pending spool events, newer schemas and contention are refusals. Existing binaries and mailbox snapshots are retained as private backups. Ordinary failures restore the executable and roll back migration; an interrupted upgrade leaves a journal/lock for inspection. This is an offline operation: callers must stop users of every store sharing the executable. SQLite and a filesystem rename are not one crash-atomic commit; see docs/install.md for recovery.
 
 Builds embed the Git commit/dirty state, content fingerprint, supported schema, build time and Bun version. `build-info` exposes these without opening the mailbox; `doctor` compares fingerprints instead of mtimes, treating unavailable checkouts and legacy/unidentifiable executables as unverified. `--version` stays semver-only.
 
@@ -807,4 +807,4 @@ marks only its delivered page, never acknowledges it; ordinary read remains non-
 select delegation cohorts by opening-time bounds, project, direction and worker labels, with grouped
 aggregates, R-7 percentiles, duration and first-question-answer latency. Delivery-only intervals exclude
 ack-inferred and historical unknown seen; compatibility seen intervals retain the recorded timestamps.
-README defines cohort/timezone/watcher semantics and the versioned output fields.
+docs/metrics.md defines cohort/timezone/watcher semantics and the versioned output fields.
