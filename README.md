@@ -109,7 +109,7 @@ agentbus config set codexBin=/opt/homebrew/bin/codex
 # Parent (Claude Desktop session; identity from CLAUDE_CODE_SESSION_ID)
 agentbus session register --provider claude --external-id "$CLAUDE_CODE_SESSION_ID" --name lead
 agentbus delegate --to codex --name executor --cwd ~/dev/project --key task-002 --file request.md --json
-agentbus wait --replace --timeout 30m --probe 60s --json   # as a background command
+agentbus wait --ensure --timeout 30m --probe 60s --json    # as a background command; returns at once if already watched
 
 # Worker (follows the generated <agentbus-contract> block; <worker-bin> fixes store and --as)
 <worker-bin> read --correlation <request-id>
@@ -120,9 +120,8 @@ agentbus wait --replace --timeout 30m --probe 60s --json   # as a background com
 # Parent: new facts mid-task (refused with exit 5 once the delegation has ended)
 agentbus followup executor --summary "Use the staging DB" --file followup.md
 
-# Parent, re-invoked by its wait
-agentbus read
-agentbus ack <result-id>
+# Parent, re-invoked by its wait: results in full, questions to answer, next steps; acks all but questions
+agentbus take
 agentbus delegations
 agentbus explain executor     # timeline, why it is stuck, next steps; changes nothing
 ```
@@ -140,7 +139,8 @@ agentbus followup <request-id|name> --file <path|-> [--key] [--summary] [--dry-r
 agentbus reply <message-id> --file <path|-> [--type message|progress|question|result] [--outcome] [--key] [--summary] [--no-ack]
 agentbus show <message-id>
 agentbus read [--ack|--mark-seen] [--all] [--unseen] [--after <seq>] [--from] [--type] [--correlation] [--limit]
-agentbus wait [--timeout 60s] [--settled] [--probe <interval>] [--replace] [--after] [--from] [--type] [--correlation] [--limit]
+agentbus take [<request-id|name>] [--peek]
+agentbus wait [--timeout 60s] [--settled] [--probe <interval>] [--replace|--ensure] [--after] [--from] [--type] [--correlation] [--limit]
 agentbus ack <message-id...> | close <request-id|name>
 agentbus status [<session>] [--probe]
 agentbus metrics [--global] [--since <date|duration>] [--until <date>] [--project <dir>] [--direction <parent:worker>] [--model <model>] [--label k=v]... [--group-by <field>]
@@ -156,6 +156,12 @@ agentbus config|cfg list|ls|path|get|set|unset|import|export
 Global: `--as`, `--config`, `--state-dir`, `--json`, `--plain`, `-q`, `-v`, `--no-color`, `--no-input`, `--version`, `-h`.
 
 For agents and humans, `read` prints readable bodies; `show <id>` prints one full body, including acknowledged mail (sender or recipient only). Use `--json` for scripts. Replies acknowledge their source in the same transaction; `--no-ack` opts out. Failed replies and dry runs leave receipts unchanged. Keyed retries can acknowledge the source without sending another reply; opting out never reverses an existing acknowledgement or delegation settlement.
+
+`take` is the parent's one-call collection: new mail of the caller's delegations (or one, by request ID or worker name), grouped per delegation with the result and messages in full, unanswered questions, notices and the latest progress while no result exists, followed by `Next:` steps. It acknowledges everything it shows except questions, which `reply` acknowledges with the answer; `--peek` acknowledges nothing. Like `read --ack`, it commits before printing.
+
+`wait --ensure` returns at once (exit 0, `reason: already_watched`, the covering `watcher`) when a live wait of the session already covers its mail (for example one owned by the agentbus-threads mod); otherwise it waits like a plain `wait`. It never retires another wait and cannot be combined with `--replace`, `--settled`, `--from` or `--type`.
+
+An option that belongs to a different command (`read --timeout`) fails with usage exit 2 and names the commands that accept it.
 
 Batch `ack <id>…` after handling results. `read --ack` accepts only the returned, filtered page and preserves pagination. It commits acknowledgement before printing, so use it only when accepting that batch: a lost stdout does not undo acceptance; recover its bodies with `read --all` or `show`.
 
@@ -182,7 +188,8 @@ The companion `claude-threads` launcher provides `cleanup.sh cancel <name|reques
 - **Roles**: `progress`/`question`/`result` go from a delegation's worker to its parent via `reply`; a parent answers with a `message` reply to the question ID. Notices come only from `system:observer` and cannot be replied to. One open delegation per worker, one unresolved question per delegation; every result is terminal.
 - **Follow-ups**: `followup <request>` sends parent mail into an open delegation and is refused (exit 5, `delegation_closed`) once it has ended; a parent's plain `send` to the worker of its open delegation also joins it, but silently becomes an ordinary message afterwards. Answers to questions are follow-ups too, and parent replies into an ended delegation are refused. Claude workers get follow-ups through the doorbell mid-turn.
 - **Completion gate**: a `success` result is refused (exit 5, `followups_pending`, listing the IDs) while any parent follow-up or answer of the delegation is unacknowledged by the worker; seen is not handled. The check and the close share one transaction with `followup`, so in either order a follow-up is handled or visibly refused. Refused attempts consume no retry key. `blocked`/`failed`/`unknown` results are accepted and report leftovers as `unhandledFollowUps` (also in `delegations`/`explain` as `followUps.unhandled`); the parent's `close` is never gated.
-- **Settlement**: a delegation's terminal transition acknowledges mail nobody needs to handle any more, with `settledReason`: a result settles the worker's side (`delegation_done`), a parent's `close` the whole correlation (`delegation_closed`). The result itself stays with the parent.
+- **Settlement**: a delegation's terminal transition acknowledges mail nobody needs to handle any more, with `settledReason`: a result settles the worker's side and the parent's progress from that delegation, which the result supersedes (`delegation_done`); a parent's `close` the whole correlation (`delegation_closed`). The result, questions, messages and notices stay with the parent. Schema v8 backfills this for finished delegations.
+- **Parent names**: an unnamed parent is named `<checkout folder>: <first request title>` when it opens its first delegation, for listings and metrics. Names are display-only; an explicit `--name` is never overwritten.
 - **Return path**: `returnPathStatus` (`ready|setup_required|unsupported|unknown`) and `returnReadiness` in `delegate`, `delegations`, `explain` and `doctor` are derived from current evidence each time, never from a flag. A background wait counts (`armed`) while its process (PID plus start time) and the ancestors that armed it are alive, it has not expired and it covers the delegation: unfiltered waits cover every delegation of the session, including later ones; `--correlation` one request; `--settled` the delegations open when armed; `--from`/`--type` none. A killed or timed-out wait is `not_armed`, a wait whose owner exited is `owner_lost`, and an arm whose process cannot be checked (or predates schema v6) is `unverified` (`unknown`). Heartbeats are app-only, so a Codex parent records a check-in on each run (`session update <me> --refresh`); one older than three binding `interval`s (default 15 minutes) is `stale` (`unknown`). Delegation rows keep the status proposed when they opened.
 - **Delivery**: unseen → seen (by `wait`, the doorbell or explicit `read --mark-seen`) → acknowledged (by `ack`, or by settlement). Concurrent waits partition, they do not broadcast; run one watcher per session. `wait --replace` enforces that: it retires the caller's other running waits, which exit 0 with `reason: superseded` without claiming mail.
 - **Worker contract v1**: delimited `<agentbus-contract version="1">` block naming request, worker, parent and provider, whose commands run a per-worker executable (`workerBin`, `<state-dir>/workers/<worker-id>/agentbus`) that fixes `--state-dir`, `--config` and `--as`; a single path, so it survives a shell variable in zsh and fish. The first Claude `UserPromptSubmit` carrying exactly one unquoted block, from the expected directory, claims the pending worker.
@@ -196,7 +203,7 @@ original chat, even when a separate session is requested. A launch receipt is on
 keep the current turn open with a recovery `read --mark-seen --json` sweep and bounded foreground
 `wait --replace --timeout 60s --probe 60s --json`; continue the same tool process, handle questions and
 ack handled mail before re-arming. Timeout never means completion or changes the return mode. Claude
-parents use one background wait and handle the delivered questions/results on wake.
+parents use one background `wait --ensure` and collect the delivered questions/results with `take` on wake.
 
 Use a heartbeat when the user requests background work with a later return; set it up before ending
 the turn. Launch-only/continue-there is explicit handoff, with no promise of a later reply here. The CLI
