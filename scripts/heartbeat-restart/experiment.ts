@@ -125,7 +125,7 @@ export function sweep(m: Experiment): { messages: Envelope[]; pages: number } {
   }
 }
 
-function publish(m: Experiment, w: Worker, key: string, type: "result" | "progress", body: string) {
+function publish(m: Experiment, w: Worker, key: string, type: "result" | "message", body: string) {
   return bus<{ messageId: string; duplicate: boolean }>(
     m,
     [
@@ -144,7 +144,7 @@ function publish(m: Experiment, w: Worker, key: string, type: "result" | "progre
   );
 }
 
-export function prepare(dir: string, mode: Experiment["mode"], threadId: string, progress = 51): Experiment {
+export function prepare(dir: string, mode: Experiment["mode"], threadId: string, filler = 51): Experiment {
   if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(threadId))
     throw new Error("Invalid thread UUID");
   dir = resolve(dir);
@@ -223,9 +223,11 @@ export function prepare(dir: string, mode: Experiment["mode"], threadId: string,
     "Seen result — проверка recovery",
   ).messageId;
   bus(m, ["wait", "--replace", "--correlation", m.workers.seen.requestId, "--timeout", "1ms"]);
-  for (let i = 0; i < progress; i++)
+  // Worker messages, not progress: a result settles its delegation's progress, and the filler must stay
+  // pending to force a multi-page recovery scan.
+  for (let i = 0; i < filler; i++)
     m.expected.push(
-      publish(m, m.workers.pending, `progress-${i}`, "progress", `Synthetic progress ${i}`).messageId,
+      publish(m, m.workers.pending, `message-${i}`, "message", `Synthetic message ${i}`).messageId,
     );
   m.results.pending = publish(
     m,

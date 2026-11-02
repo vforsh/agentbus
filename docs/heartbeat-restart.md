@@ -16,7 +16,7 @@ bun /workspace/agentbus/scripts/heartbeat-restart.ts prepare \
   --dir "$experiment_dir" --thread "$CODEX_THREAD_ID"
 ```
 
-This creates a private config with explicit CLI/store paths and unavailable provider binaries, three synthetic delegations, 51 progress messages, one seen-but-unacknowledged result, and one unread result. No model worker runs. The open third delegation guards against premature cleanup. Each public CLI call is saved in `receipts/`; `prepared-mail` records the two receipt states and two-page recovery scan. `experiment.json`, `heartbeat-prompt.txt`, and the complete `continuation.md` are saved before creating the heartbeat.
+This creates a private config with explicit CLI/store paths and unavailable provider binaries, three synthetic delegations, 51 worker messages (progress would be settled by the result), one seen-but-unacknowledged result, and one unread result. No model worker runs. The open third delegation guards against premature cleanup. Each public CLI call is saved in `receipts/`; `prepared-mail` records the two receipt states and two-page recovery scan. `experiment.json`, `heartbeat-prompt.txt`, and the complete `continuation.md` are saved before creating the heartbeat.
 
 Through the supported app tool, create **one heartbeat** on the saved native thread, at a five-minute cadence, ACTIVE, using the saved prompt verbatim. Save the complete creation tool response as `automation-create.json`. Do not manufacture IDs or write automation files. Then:
 

@@ -61,8 +61,9 @@ export function insertDelegation(db: Db, d: InsertDelegation): DelegationRow {
 /**
  * First terminal transition wins: the update only applies while the delegation is still open. The same
  * transition settles mail nobody needs to handle any more (receipts acknowledged with a `settled_reason`):
- * a result settles the worker's side (request, follow-ups, answers), a parent's close settles the whole
- * correlation. A result's own receipt is the parent's to acknowledge and is never settled.
+ * a result settles the worker's side (request, follow-ups, answers) and the parent's progress, which the
+ * result supersedes; a parent's close settles the whole correlation. A result's own receipt is the parent's
+ * to acknowledge and is never settled, nor are questions, messages or notices.
  */
 export function closeDelegation(
   db: Db,
@@ -84,7 +85,9 @@ export function closeDelegation(
        seen_at = coalesce(seen_at, $now), settled_reason = $reason
      WHERE acknowledged_at IS NULL
        AND message_id IN (SELECT id FROM messages WHERE correlation_id = $request)
-       AND ($state = 'closed' OR recipient_id = (SELECT worker_id FROM delegations WHERE request_id = $request))`,
+       AND ($state = 'closed'
+         OR recipient_id = (SELECT worker_id FROM delegations WHERE request_id = $request)
+         OR message_id IN (SELECT id FROM messages WHERE correlation_id = $request AND type = 'progress'))`,
   ).run({ now, reason: `delegation_${state}`, request: requestId, state });
   return true;
 }

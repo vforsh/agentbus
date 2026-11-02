@@ -11,6 +11,7 @@ import m004 from "./migrations/004_settlement.sql" with { type: "text" };
 import m005 from "./migrations/005_indexes.sql" with { type: "text" };
 import m006 from "./migrations/006_wait_evidence.sql" with { type: "text" };
 import m007 from "./migrations/007_seen_source.sql" with { type: "text" };
+import m008 from "./migrations/008_settle_progress.sql" with { type: "text" };
 
 export const MIGRATIONS: ReadonlyArray<{ version: number; name: string; sql: string }> = [
   { version: 1, name: "mailbox", sql: m001 },
@@ -20,6 +21,7 @@ export const MIGRATIONS: ReadonlyArray<{ version: number; name: string; sql: str
   { version: 5, name: "indexes", sql: m005 },
   { version: 6, name: "wait_evidence", sql: m006 },
   { version: 7, name: "seen_source", sql: m007 },
+  { version: 8, name: "settle_progress", sql: m008 },
 ];
 
 export const SCHEMA_VERSION = MIGRATIONS[MIGRATIONS.length - 1]!.version;
