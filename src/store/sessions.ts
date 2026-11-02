@@ -186,6 +186,15 @@ export function bindSession(
   return { row: getSession(db, session.id)!, alreadyBound };
 }
 
+/** Names a session that has none; explicit names are never overwritten. */
+export function nameIfUnnamed(db: Db, sessionId: string, name: string): void {
+  db.query("UPDATE sessions SET name = ?, updated_at = ? WHERE id = ? AND name IS NULL").run(
+    name,
+    nowIso(),
+    sessionId,
+  );
+}
+
 export function patchAdapterBinding(db: Db, sessionId: string, patch: Record<string, unknown>): void {
   const row = getSession(db, sessionId);
   if (!row) return;

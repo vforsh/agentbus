@@ -1,3 +1,4 @@
+import { basename } from "node:path";
 import type { Resolved } from "../config/config.ts";
 import { AgentbusError, conflict, EXIT, notFound, usageError } from "../errors.ts";
 import { CONTRACT_VERSION, renderContract } from "../protocol/contract.ts";
@@ -27,7 +28,7 @@ import {
   messagesInCorrelation,
 } from "../store/messages.ts";
 import { activeTurnForSession } from "../store/observations.ts";
-import { getSession, registerSession, type SessionRow } from "../store/sessions.ts";
+import { getSession, nameIfUnnamed, registerSession, type SessionRow } from "../store/sessions.ts";
 import { hashIntent, newId } from "../util/misc.ts";
 import { followUpCounts, parentMail } from "./followups.ts";
 
@@ -86,6 +87,31 @@ export interface SendReceipt {
   delegation: DelegationRow | null;
   /** Request ID of the open delegation this message joined as a follow-up, if any. */
   joined: string | null;
+}
+
+const AUTO_NAME_LIMIT = 80;
+
+/**
+ * An unnamed parent is named after its first delegation, `<checkout>: <task title>`, so listings and metrics
+ * show something better than a UUID. Names are display-only, never routing addresses.
+ */
+function nameParent(db: Db, parent: SessionRow, summary: string | null, body: string): void {
+  if (parent.name) return;
+  const title =
+    summary ??
+    body
+      .split("\n")
+      .map((l) => l.replace(/^[\s#>*-]+/, "").trim())
+      .find(Boolean) ??
+    "";
+  const folder = parent.cwd ? basename(parent.cwd) : "";
+  const name = [folder, title].filter(Boolean).join(": ");
+  if (!name) return;
+  nameIfUnnamed(
+    db,
+    parent.id,
+    name.length > AUTO_NAME_LIMIT ? `${name.slice(0, AUTO_NAME_LIMIT - 1)}…` : name,
+  );
 }
 
 export function sendMessage(db: Db, caller: SessionRow, input: SendInput): SendReceipt {
@@ -162,6 +188,7 @@ export function sendMessage(db: Db, caller: SessionRow, input: SendInput): SendR
         returnPathStatus: rp.returnPathStatus,
         returnPathReason: rp.returnPathReason,
       });
+      nameParent(db, caller, input.summary, input.body);
     }
     return { message, duplicate: false, delegation, joined: task?.request_id ?? null };
   });
@@ -573,6 +600,7 @@ export function delegate(db: Db, paths: Resolved, caller: SessionRow, input: Del
       returnPathStatus: rp.returnPathStatus,
       returnPathReason: rp.returnPathReason,
     });
+    nameParent(db, caller, input.summary, input.body);
     return { worker, request, delegation, duplicate: false };
   });
 }
