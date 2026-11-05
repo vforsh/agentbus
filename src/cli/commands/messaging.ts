@@ -299,6 +299,7 @@ export function registerMessaging(program: Command): void {
             messageId: r.message.id,
             sequence: r.message.sequence,
             duplicate: r.duplicate,
+            key: r.message.idempotency_key,
             to: r.message.to_id,
             correlationId: r.message.correlation_id,
             inReplyTo: r.message.in_reply_to,

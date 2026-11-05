@@ -297,6 +297,43 @@ export function unresolvedQuestion(msgs: MessageRow[], d: DelegationRow): Messag
   return null;
 }
 
+/**
+ * The key a reply gets when the caller passes none, so agents never invent one. A delegation takes one result
+ * and one open question at a time, so (request, type, ordinal) names those, and a retry of the latest question
+ * reuses its key. Progress and answers may repeat, so their keys carry the intent: an identical retry
+ * collapses, new text is new mail. Other replies stay unkeyed.
+ */
+function defaultKey(
+  db: Db,
+  caller: SessionRow,
+  original: MessageRow,
+  type: ReplyInput["type"],
+  hash: string,
+): string | null {
+  if (type === "message")
+    return original.type === "question" ? `auto:answer:${original.id}:${hash.slice(0, 16)}` : null;
+  const d = getDelegation(db, original.correlation_id);
+  if (!d || d.worker_id !== caller.id) return null;
+  if (type === "result") return `auto:result:${d.request_id}`;
+  if (type === "progress") return `auto:progress:${d.request_id}:${hash.slice(0, 16)}`;
+  const asked = messagesInCorrelation(db, d.request_id).filter(
+    (m) => m.type === "question" && m.from_id === caller.id,
+  );
+  const last = asked.at(-1);
+  if (last?.intent_hash === hash && last.idempotency_key) return last.idempotency_key;
+  return `auto:question:${d.request_id}:${asked.length + 1}`;
+}
+
+/** A default key already names different mail: say what that means instead of reporting a key clash. */
+function conflictOnDefaultKey(key: string, existing: MessageRow): AgentbusError {
+  if (existing.type !== "result") return conflictOnKey(key, existing);
+  return conflict(
+    "delegation_closed",
+    `This delegation already has your result ${existing.id} (${existing.outcome}); it takes exactly one`,
+    { requestId: existing.correlation_id, resultId: existing.id, key },
+  );
+}
+
 export function replyMessage(db: Db, caller: SessionRow, input: ReplyInput): ReplyReceipt {
   if ((input.type === "result") !== (input.outcome !== null)) {
     throw usageError(
@@ -324,10 +361,12 @@ export function replyMessage(db: Db, caller: SessionRow, input: ReplyInput): Rep
       outcome: input.outcome,
     };
     const hash = hashIntent(intent);
-    if (input.key) {
-      const existing = getByKey(db, caller.id, input.key);
+    const key = input.key ?? defaultKey(db, caller, original, input.type, hash);
+    if (key) {
+      const existing = getByKey(db, caller.id, key);
       if (existing) {
-        if (existing.intent_hash !== hash) throw conflictOnKey(input.key, existing);
+        if (existing.intent_hash !== hash)
+          throw input.key ? conflictOnKey(key, existing) : conflictOnDefaultKey(key, existing);
         const d = getDelegation(db, existing.correlation_id);
         if (acknowledged.length > 0) acknowledge(db, acknowledged);
         return {
@@ -398,7 +437,7 @@ export function replyMessage(db: Db, caller: SessionRow, input: ReplyInput): Rep
         if (pending.pending > 0 && input.outcome === "success") {
           throw conflict(
             "followups_pending",
-            `${pending.pending} parent follow-up(s) are not acknowledged: ${pending.pendingIds.join(", ")}. Read them with \`read --correlation ${delegation.request_id}\`, handle them, \`ack\` them, then publish the result again with the same --key. Other outcomes are accepted and report them as unhandled`,
+            `${pending.pending} parent follow-up(s) are not acknowledged: ${pending.pendingIds.join(", ")}. Read them with \`read --correlation ${delegation.request_id}\`, handle them, \`ack\` them, then publish the result again (same --key, if you passed one). Other outcomes are accepted and report them as unhandled`,
             {
               requestId: delegation.request_id,
               pending: pending.pendingIds,
@@ -421,7 +460,7 @@ export function replyMessage(db: Db, caller: SessionRow, input: ReplyInput): Rep
       body: input.body,
       correlationId: original.correlation_id,
       inReplyTo: original.id,
-      idempotencyKey: input.key,
+      idempotencyKey: key,
       intentHash: hash,
       outcome: input.outcome,
       notice: null,
