@@ -1,3 +1,5 @@
+import { MAX_WAIT_MS } from "../protocol/types.ts";
+import { parseDuration } from "../util/misc.ts";
 import { type Db, SYSTEM_OBSERVER_ID, tx } from "./db.ts";
 
 export interface PrunedWorker {
@@ -102,6 +104,14 @@ function collect(db: Db, cutoff: string, liveSince: string): void {
 function drop(db: Db): void {
   for (const t of ["prune_workers", "prune_delegations", "prune_messages", "prune_turns"])
     db.run(`DROP TABLE IF EXISTS temp.${t}`);
+}
+
+/** Prune bounds for a retention window; `liveSince` bounds how old an unended wait arm may be and still run. */
+export function pruneWindow(olderThan: string, now = Date.now()): { cutoff: string; liveSince: string } {
+  return {
+    cutoff: new Date(now - parseDuration(olderThan, "--older-than")).toISOString(),
+    liveSince: new Date(now - MAX_WAIT_MS).toISOString(),
+  };
 }
 
 /**

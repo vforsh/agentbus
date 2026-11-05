@@ -80,7 +80,7 @@ Launchers (`claude-to-codex`, `codex-to-claude`, `claude-threads`) append `contr
 - `agentbus upgrade` (npm) or `bun run upgrade` (checkout) builds, smoke-tests and installs the worker executable on the internal disk, backing up and migrating the store. Offline only: open delegations, live waits, queued hook events and newer schemas are refused; never close real work to get past it. `build-info --json` shows the embedded commit and schema.
 - `agentbus doctor`: read-only readiness (build freshness, schema, spool, hooks, provider CLIs, caller, return path).
 - Claude workers are observed through per-worker hooks (`claude --bg --settings <claudeSettings>`), which also ring the doorbell. `agentbus hooks claude install|uninstall|status|print` manages an optional user-level install that also covers handed-off sessions.
-- `agentbus config set codexBin=… claudeBin=…`; `status [--probe]`; `event drain`; `prune [--older-than 7d] [--dry-run]` deletes finished, quiet `delegate`-created workers (never registered sessions or unacked parent mail).
+- `agentbus config set codexBin=… claudeBin=…`; `status [--probe]`; `event drain`; `prune [--older-than 7d] [--dry-run]` deletes finished, quiet `delegate`-created workers (never registered sessions or unacked parent mail); config `pruneOlderThan` sets the default window and `doctor` reports what it would prune.
 
 ## Exit codes
 

@@ -1,7 +1,5 @@
 import type { Command } from "commander";
-import { MAX_WAIT_MS } from "../../protocol/types.ts";
-import { type PruneResult, prune } from "../../store/prune.ts";
-import { parseDuration } from "../../util/misc.ts";
+import { type PruneResult, prune, pruneWindow } from "../../store/prune.ts";
 import { action } from "../action.ts";
 import { drainBeforeRead } from "./messaging.ts";
 
@@ -20,13 +18,14 @@ export function registerPrune(program: Command): void {
     .description(
       "Delete finished workers with their delegations, mail and observations (every parent's; never unacknowledged mail)",
     )
-    .option("--older-than <duration>", "only delegations that ended at least this long ago", "7d")
+    .option(
+      "--older-than <duration>",
+      "only delegations that ended at least this long ago (default: config pruneOlderThan, else 7d)",
+    )
     .option("--dry-run", "report what would be deleted without writing")
     .action(
-      action((ctx, opts: { olderThan: string; dryRun?: boolean }) => {
-        const now = Date.now();
-        const cutoff = new Date(now - parseDuration(opts.olderThan, "--older-than")).toISOString();
-        const liveSince = new Date(now - MAX_WAIT_MS).toISOString();
+      action((ctx, opts: { olderThan?: string; dryRun?: boolean }) => {
+        const { cutoff, liveSince } = pruneWindow(opts.olderThan ?? ctx.paths.pruneOlderThan);
         const db = ctx.db();
         // Spooled hook events may show a worker is still active; ingest them before deciding.
         drainBeforeRead(ctx, db);

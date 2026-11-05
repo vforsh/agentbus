@@ -25,6 +25,7 @@ export function registerConfig(program: Command): void {
         claudeSettingsPath: string;
         claudeJobsDir: string;
         cliCommand: string;
+        pruneOlderThan: string;
       };
     },
   ) => ({
@@ -34,6 +35,7 @@ export function registerConfig(program: Command): void {
     claudeSettingsPath: ctx.paths.claudeSettingsPath,
     claudeJobsDir: ctx.paths.claudeJobsDir,
     cliCommand: ctx.paths.cliCommand,
+    pruneOlderThan: ctx.paths.pruneOlderThan,
     configured: c,
   });
 

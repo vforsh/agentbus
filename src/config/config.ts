@@ -4,6 +4,19 @@ import { isAbsolute, join, resolve } from "node:path";
 import { z } from "zod";
 import { AgentbusError, EXIT, usageError } from "../errors.ts";
 import { fileExists, writeFileAtomic } from "../util/fsx.ts";
+import { parseDuration } from "../util/misc.ts";
+
+/** How long finished workers are kept when `prune` runs without `--older-than`. */
+const DEFAULT_PRUNE_OLDER_THAN = "7d";
+
+const isDuration = (v: string): boolean => {
+  try {
+    parseDuration(v, "pruneOlderThan");
+    return true;
+  } catch {
+    return false;
+  }
+};
 
 /** Every accepted key; unknown keys are rejected rather than silently ignored. */
 export const ConfigSchema = z
@@ -14,6 +27,7 @@ export const ConfigSchema = z
     claudeSettingsPath: z.string().min(1).optional(),
     claudeJobsDir: z.string().min(1).optional(),
     cliCommand: z.string().min(1).optional(),
+    pruneOlderThan: z.string().refine(isDuration, "must be a duration such as 14d or 36h").optional(),
   })
   .strict();
 
@@ -43,6 +57,8 @@ export interface Resolved {
   cliCommand: string;
   /** The same command as an argument vector, or null when `cliCommand` comes from config verbatim. */
   cliArgv: string[] | null;
+  /** Retention for `prune` and the doctor's retention check. */
+  pruneOlderThan: string;
 }
 
 const expandHome = (p: string): string => (p === "~" || p.startsWith("~/") ? join(homedir(), p.slice(2)) : p);
@@ -175,6 +191,7 @@ export function resolvePaths(overrides: PathOverrides): Resolved {
       ? absolute(config.claudeSettingsPath)
       : join(homedir(), ".claude", "settings.json"),
     claudeJobsDir: config.claudeJobsDir ? absolute(config.claudeJobsDir) : join(homedir(), ".claude", "jobs"),
+    pruneOlderThan: config.pruneOlderThan ?? DEFAULT_PRUNE_OLDER_THAN,
     ...cliOf(config),
   };
 }

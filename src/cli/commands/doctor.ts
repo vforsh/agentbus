@@ -11,6 +11,7 @@ import { resolveCallerRef } from "../../services/caller.ts";
 import { returnPathResolver } from "../../services/returnpath.ts";
 import { readSchemaVersion, SCHEMA_VERSION } from "../../store/db.ts";
 import { openDelegationsForParent } from "../../store/delegations.ts";
+import { prune, pruneWindow } from "../../store/prune.ts";
 import { resolveAddress } from "../../store/sessions.ts";
 import { fileExists, modeOf } from "../../util/fsx.ts";
 import { realOrSelf } from "../../util/misc.ts";
@@ -89,6 +90,8 @@ function runChecks(opts: { config?: string; stateDir?: string; as?: string }): C
       } finally {
         db.close();
       }
+      const retention = retentionCheck(paths);
+      if (retention) add("retention", retention.status, retention.message, retention.hint);
       const dbMode = modeOf(paths.dbPath) ?? 0;
       if (dbMode & 0o077)
         add("store_mode", "warn", `database mode ${dbMode.toString(8)}`, "chmod 600 the database");
@@ -244,6 +247,29 @@ function runChecks(opts: { config?: string; stateDir?: string; as?: string }): C
     add("caller", "warn", (err as Error).message);
   }
   return checks;
+}
+
+/**
+ * What `prune` would remove under the retention window: a dry run on a read-only connection. The spool is not
+ * drained first, so the count can include a worker whose newest hook events are still queued; prune drains.
+ */
+function retentionCheck(paths: Resolved): Omit<Check, "name"> | null {
+  const db = new Database(paths.dbPath, { readonly: true, strict: true });
+  try {
+    if (readSchemaVersion(db) !== SCHEMA_VERSION) return null;
+    const { counts } = prune(db, { ...pruneWindow(paths.pruneOlderThan), dryRun: true });
+    const configured = paths.config.pruneOlderThan !== undefined;
+    const message = `${counts.workers} finished worker(s) with ${counts.messages} message(s) ended more than ${paths.pruneOlderThan} ago${configured ? "" : " (default window)"}`;
+    if (counts.workers === 0) return { status: "ok", message };
+    const hint = configured
+      ? "run `agentbus prune`"
+      : "run `agentbus prune`; keep a different window with `agentbus config set pruneOlderThan=14d`";
+    return { status: "ok", message, hint };
+  } catch {
+    return null;
+  } finally {
+    db.close();
+  }
 }
 
 /** The caller's current return path as a parent of open delegations; read-only (one `ps` call at most). */

@@ -46,7 +46,7 @@ The first verified local baseline is the annotated tag `v0.1.0`. Reproduce it fr
 
 ## Pruning history
 
-Finished history stays until pruned: `agentbus prune --dry-run` lists workers created by `delegate` whose delegations ended, and whose mail, observations and waits went quiet, more than 7 days ago (`--older-than`); `agentbus prune` deletes them with their history. Registered sessions (parents) are never pruned, and a parent's unacknowledged mail keeps its worker. Worker settings files are kept so a resumed background owner can still start.
+Finished history stays until pruned: `agentbus prune --dry-run` lists workers created by `delegate` whose delegations ended, and whose mail, observations and waits went quiet, more than the retention window ago (`--older-than`, else config `pruneOlderThan`, else 7 days); `agentbus prune` deletes them with their history. `doctor` reports how many workers the window would prune (it never prunes); nothing prunes automatically. Registered sessions (parents) are never pruned, and a parent's unacknowledged mail keeps its worker. Worker settings files are kept so a resumed background owner can still start.
 
 ## Claude hooks
 
@@ -71,6 +71,7 @@ Observation scope is the background owner, as with the Codex runner: after a Des
 | `claudeSettingsPath` | `~/.claude/settings.json` | Target of `hooks claude` |
 | `claudeJobsDir` | `~/.claude/jobs` | Optional job diagnostics for `--probe` |
 | `cliCommand` | installed executable, else `<bun> <checkout>/src/main.ts` | Command rendered into worker contracts and hooks |
+| `pruneOlderThan` | `7d` | Retention window for `prune` without `--older-than`, and for the `retention` line of `doctor` |
 
 ```bash
 agentbus config set codexBin=/opt/homebrew/bin/codex

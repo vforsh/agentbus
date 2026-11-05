@@ -26,7 +26,7 @@ agentbus explain <request-id|name> [--global] [--probe] [--limit 40]
 agentbus event ingest --provider claude --source hook        # stdin, silent; used by hooks
 agentbus event ingest --provider codex --source runner --file <event.json>
 agentbus event drain
-agentbus prune [--older-than 7d] [--dry-run]
+agentbus prune [--older-than <duration>] [--dry-run]   # default: config pruneOlderThan, else 7d
 agentbus hooks claude print|install|uninstall|status [--dry-run]
 agentbus config|cfg list|ls|path|get|set|unset|import|export
 ```
