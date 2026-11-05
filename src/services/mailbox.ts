@@ -186,7 +186,6 @@ export function sendMessage(db: Db, caller: SessionRow, input: SendInput): SendR
         contractVersion: null,
         contract: null,
         returnPath: rp.returnPath,
-        returnPathStatus: rp.returnPathStatus,
         returnPathReason: rp.returnPathReason,
       });
       nameParent(db, caller, input.summary, input.body);
@@ -648,7 +647,6 @@ export function delegate(db: Db, paths: Resolved, caller: SessionRow, input: Del
       contractVersion: CONTRACT_VERSION,
       contract,
       returnPath: rp.returnPath,
-      returnPathStatus: rp.returnPathStatus,
       returnPathReason: rp.returnPathReason,
     });
     nameParent(db, caller, input.summary, input.body);

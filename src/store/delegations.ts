@@ -1,4 +1,4 @@
-import type { Outcome, ReturnPath, ReturnPathStatus } from "../protocol/types.ts";
+import type { Outcome, ReturnPath } from "../protocol/types.ts";
 import { nowIso } from "../util/misc.ts";
 import type { Db } from "./db.ts";
 
@@ -12,7 +12,6 @@ export interface DelegationRow {
   contract_version: number | null;
   contract: string | null;
   return_path: ReturnPath;
-  return_path_status: ReturnPathStatus;
   return_path_reason: string | null;
   opened_at: string;
   closed_at: string | null;
@@ -35,15 +34,14 @@ export interface InsertDelegation {
   contractVersion: number | null;
   contract: string | null;
   returnPath: ReturnPath;
-  returnPathStatus: ReturnPathStatus;
   returnPathReason: string | null;
 }
 
 export function insertDelegation(db: Db, d: InsertDelegation): DelegationRow {
   db.query(
     `INSERT INTO delegations (request_id, parent_id, worker_id, state, contract_version, contract, return_path,
-       return_path_status, return_path_reason, opened_at)
-     VALUES (?, ?, ?, 'open', ?, ?, ?, ?, ?, ?)`,
+       return_path_reason, opened_at)
+     VALUES (?, ?, ?, 'open', ?, ?, ?, ?, ?)`,
   ).run(
     d.requestId,
     d.parentId,
@@ -51,7 +49,6 @@ export function insertDelegation(db: Db, d: InsertDelegation): DelegationRow {
     d.contractVersion,
     d.contract,
     d.returnPath,
-    d.returnPathStatus,
     d.returnPathReason,
     nowIso(),
   );
