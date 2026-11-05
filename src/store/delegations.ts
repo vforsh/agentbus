@@ -117,6 +117,15 @@ export function openDelegationsForParent(db: Db, parentId: string): DelegationRo
     .all(parentId);
 }
 
+/** The worker's most recent delegation, open or not. */
+export function latestDelegationForWorker(db: Db, workerId: string): DelegationRow | null {
+  return db
+    .query<DelegationRow, [string]>(
+      "SELECT * FROM delegations WHERE worker_id = ? ORDER BY opened_at DESC, rowid DESC LIMIT 1",
+    )
+    .get(workerId);
+}
+
 /** The most recent delegation between this parent and worker, open or not. */
 export function latestDelegationBetween(db: Db, parentId: string, workerId: string): DelegationRow | null {
   return db

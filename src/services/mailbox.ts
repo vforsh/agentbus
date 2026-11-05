@@ -17,6 +17,7 @@ import {
   delegationsForParent,
   getDelegation,
   insertDelegation,
+  latestDelegationForWorker,
   openDelegationForWorker,
 } from "../store/delegations.ts";
 import {
@@ -503,6 +504,17 @@ export function ackMessages(db: Db, caller: SessionRow, ids: string[]) {
     const { newlyAcknowledged } = acknowledge(db, ids);
     return { acknowledged: ids, newlyAcknowledged };
   });
+}
+
+/** The caller's delegation as a worker: its open one, else its latest, so a retry after the result resolves. */
+export function workerDelegation(db: Db, caller: SessionRow): DelegationRow {
+  const d = openDelegationForWorker(db, caller.id) ?? latestDelegationForWorker(db, caller.id);
+  if (d) return d;
+  throw notFound(
+    "delegation_not_found",
+    "The caller is not the worker of any delegation; run this through the executable named in your <agentbus-contract>",
+    { caller: caller.id },
+  );
 }
 
 /** Selects one of the caller's delegations by request ID or an unambiguous worker name. */

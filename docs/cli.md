@@ -16,6 +16,8 @@ agentbus reply <message-id> --file <path|-> [--type message|progress|question|re
 agentbus show <message-id>
 agentbus read [--ack|--mark-seen] [--all] [--unseen] [--after <seq>] [--from] [--type] [--correlation] [--limit]
 agentbus take [<request-id|name>] [--peek]
+agentbus ask --file <path|-> [--summary] [--timeout 30m] [--no-wait]                 # worker
+agentbus finish --file <path|-> [--outcome success|blocked|failed|unknown] [--summary]  # worker
 agentbus wait [--timeout 60s] [--settled] [--probe <interval>] [--replace|--ensure] [--after] [--from] [--type] [--correlation] [--limit]
 agentbus ack <message-id...> | close <request-id|name>
 agentbus status [<session>] [--probe]
@@ -36,6 +38,10 @@ Global: `--as`, `--config`, `--state-dir`, `--json`, `--plain`, `-q`, `-v`, `--n
 For agents and humans, `read` prints readable bodies; `show <id>` prints one full body, including acknowledged mail (sender or recipient only). Use `--json` for scripts. Replies acknowledge their source in the same transaction; `--no-ack` opts out. Failed replies and dry runs leave receipts unchanged. Keyed retries can acknowledge the source without sending another reply; opting out never reverses an existing acknowledgement or delegation settlement.
 
 `take` is the parent's one-call collection: new mail of the caller's delegations (or one, by request ID or worker name), grouped per delegation with the result and messages in full, unanswered questions, notices and the latest progress while no result exists, followed by `Next:` steps. It acknowledges everything it shows except questions, which `reply` acknowledges with the answer; `--peek` acknowledges nothing. Like `read --ack`, it commits before printing.
+
+`ask` and `finish` are the worker's verbs; both resolve the caller's delegation. `ask` posts one question (keyed, so re-running never posts twice and a different question while one is open is refused) and waits on that request for any unacknowledged parent mail, including mail the doorbell already marked seen; it prints the answer and any follow-ups in full, acknowledges them before printing, and exits 3 on timeout. An answer acknowledged by an earlier run is shown again without waiting. `--no-wait` only posts. `finish` publishes the one result (keyed); for a `success` it first shows unacknowledged parent mail in full with the `ack` command to run (exit 5, nothing published). A changed result after publication is refused (exit 5, `delegation_closed`).
+
+`reply` without `--key` derives one for task replies and answers (see [protocol](protocol.md)); JSON receipts show it as `key`.
 
 `wait --ensure` returns at once (exit 0, `reason: already_watched`, the covering `watcher`) when a live wait of the session already covers its mail (for example one owned by the agentbus-threads mod); otherwise it waits like a plain `wait`. It never retires another wait and cannot be combined with `--replace`, `--settled`, `--from` or `--type`.
 

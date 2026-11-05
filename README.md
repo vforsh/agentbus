@@ -37,8 +37,8 @@ agentbus wait --ensure --timeout 30m --probe 60s --json   # run in the backgroun
 
 # Worker (commands come from its <agentbus-contract> block)
 <worker-bin> read --correlation <request-id>
-<worker-bin> reply <request-id> --type result --outcome success --key result-1 \
-  --summary "Parser fixed; tests pass" --file result.md
+<worker-bin> ask --summary "Keep the v1 routes?" --file question.md    # waits for the answer
+<worker-bin> finish --outcome success --summary "Parser fixed; tests pass" --file result.md
 
 # Parent, mid-task or after waking
 agentbus followup executor --summary "Use the staging DB" --file followup.md

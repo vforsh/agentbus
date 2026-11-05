@@ -30,6 +30,8 @@ export interface WaitOptions {
   settled: boolean;
   /** Retire the caller's other running waits: one watcher per session. */
   replace: boolean;
+  /** Also return seen but unacknowledged mail, such as an answer the doorbell already announced. */
+  includeSeen?: boolean;
 }
 
 export interface WaitOrigin {
@@ -161,7 +163,7 @@ export async function runWait(
       const unseen = selectInbox(db, {
         recipientId: caller.id,
         includeAcknowledged: false,
-        unseenOnly: true,
+        unseenOnly: !opts.includeSeen,
         after: opts.after,
         fromId: opts.fromId,
         type: opts.type,

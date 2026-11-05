@@ -48,26 +48,21 @@ export function workerBinScript(c: WorkerPaths): string {
 
 export function renderContract(c: ContractInput): string {
   const ab = workerBinCommand(c.stateDir, c.workerId);
-  const short = c.requestId.slice(0, 8);
-  const waitStep =
-    c.provider === "claude"
-      ? [
-          `   Then arm ONE background wait and end your turn (run it with run_in_background; never poll in the foreground):`,
-          `     ${ab} wait --replace --correlation ${c.requestId} --timeout 30m --json`,
-          `   When it re-invokes you (answer, timeout exit 3, or any other exit): run the read command from step 1,`,
-          `   handle and ack the answer, and re-arm the wait only if you are still waiting.`,
-          `   --replace retires any earlier wait of yours. If you also lead your own Agentbus children, use your`,
-          `   single unfiltered wait (also with --replace) for both roles instead.`,
-        ]
-      : [
-          `   Then either wait in-turn with bounded calls (repeat while still waiting; exit 3 means timeout):`,
-          `     ${ab} wait --correlation ${c.requestId} --timeout 10m --json`,
-          `   or end your turn with the question outstanding; the parent resumes this thread with the answer.`,
-        ];
-  const followUpStep =
-    c.provider === "claude"
-      ? ["   Agentbus shows new ones to you after a tool call or when you try to end your turn."]
-      : ["   Check for them with the read command from step 1 at each milestone."];
+  const claude = c.provider === "claude";
+  const askStep = claude
+    ? [
+        "   Run it in the background (run_in_background) and end your turn: it wakes you with the answer, printed",
+        "   in full and already acknowledged. On exit 3 (timeout), or a follow-up instead of the answer, run the",
+        "   same command again; it never posts twice. If you also lead your own Agentbus children, add --no-wait",
+        "   and keep your single unfiltered wait instead.",
+      ]
+    : [
+        "   Add --timeout 10m and run it in-turn; on exit 3 (timeout) run it again, it never posts twice. Or add",
+        "   --no-wait and end your turn; the parent resumes this thread with the answer.",
+      ];
+  const followUpStep = claude
+    ? "   Agentbus shows them to you after a tool call or when you try to end your turn."
+    : "   Check for them with the read command from step 1 at each milestone.";
   return [
     OPEN_TAG,
     `agentbus-request: ${c.requestId}`,
@@ -76,40 +71,34 @@ export function renderContract(c: ContractInput): string {
     `agentbus-provider: ${c.provider}`,
     "",
     "You are a delegated worker. Agentbus is the durable mailbox between you and the agent that delegated",
-    "this task (your parent). The request named above is your task; the mailbox copy is the record.",
-    "Run every Agentbus command through this executable (CLI, store paths and identity are fixed for this task).",
-    "It is a single path, so it is safe to keep in a shell variable or alias:",
+    "this task (your parent); the mailbox copy of the request is the record. Run every Agentbus command",
+    "through this single executable (CLI, store and identity are fixed; safe to keep in a shell variable):",
     `  ${ab}`,
-    "If it is missing, the equivalent command is the line below. Type it out in full each time: it is",
-    "several words, and zsh and fish do not split a variable into words.",
+    "If it is missing, type this out in full instead (zsh and fish do not word-split variables):",
     `  ${workerCommand(c)}`,
     "",
-    "1. Read the request and acknowledge it:",
+    "1. Read the request, then acknowledge it:",
     `     ${ab} read --correlation ${c.requestId}`,
     `     ${ab} ack ${c.requestId}`,
-    "2. Optional progress, only at real milestones:",
+    "2. Optional progress, at real milestones only:",
     `     ${ab} reply ${c.requestId} --type progress --summary "<one line>" --file - <<'EOF'`,
     "     <details>",
     "     EOF",
-    "3. On a decision or blocker within this task's authorization, ask the parent instead of the user",
-    "   (provider permission prompts still belong to the user). One open question at a time; bundle decisions:",
-    `     ${ab} reply ${c.requestId} --type question --key q<N>-${short} --summary "<question>" --file - <<'EOF'`,
+    "3. A decision or blocker within this task's authorization goes to the parent, not the user (provider",
+    "   permission prompts still belong to the user). Bundle decisions; one question at a time:",
+    `     ${ab} ask --summary "<question>" --file - <<'EOF'`,
     "     <context and options>",
     "     EOF",
-    "   Before waiting, recover an answer that may already have arrived with the read command from step 1.",
-    ...waitStep,
-    "4. When finished, publish exactly one result. Finish all writes and delegated background edits first,",
-    "   then end your turn promptly. The body holds the result, verification performed and open decisions:",
-    `     ${ab} reply ${c.requestId} --type result --outcome <success|blocked|failed|unknown> --key result-${short} --summary "<one line>" --file - <<'EOF'`,
-    "     <result>",
+    ...askStep,
+    "4. When finished, publish exactly one result. Finish all writes and delegated background edits first:",
+    `     ${ab} finish --outcome <success|blocked|failed|unknown> --summary "<one line>" --file - <<'EOF'`,
+    "     <what changed, verification performed, open decisions>",
     "     EOF",
-    "   A `blocked` result hands the task back; use a question instead if the parent can unblock you here.",
-    "   Right before publishing it, run the read command from step 1 and handle and ack any follow-up first.",
-    "   A success result is refused (exit 5, followups_pending) while a follow-up or answer is unacknowledged:",
-    "   handle and ack the listed messages, then publish again with the same --key.",
-    "5. Your parent may send follow-up messages (new facts, changed scope) while you work.",
-    ...followUpStep,
-    "   Treat a follow-up like an answer: handle it within this task, then ack it.",
+    "   If it prints parent messages instead (exit 5), handle them, run the ack command it names and run",
+    "   finish again. Then end your turn. `blocked` hands the task back; ask instead if the parent can help.",
+    "5. Your parent may send follow-ups (new facts, changed scope) while you work.",
+    followUpStep,
+    "   Handle them within the task, then ack them.",
     "6. Never message the parent through provider-native channels; the mailbox is the record.",
     CLOSE_TAG,
   ].join("\n");

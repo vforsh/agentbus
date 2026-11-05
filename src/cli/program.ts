@@ -13,6 +13,7 @@ import { registerPrune } from "./commands/prune.ts";
 import { registerInit, registerSessionCommands, registerWhoami } from "./commands/session.ts";
 import { registerStatus } from "./commands/status.ts";
 import { registerTake } from "./commands/take.ts";
+import { registerWorker } from "./commands/worker.ts";
 
 export const VERSION = pkg.version;
 
@@ -45,6 +46,7 @@ export function buildProgram(opts: { quietErrors?: boolean } = {}): Command {
   registerDelegate(program);
   registerMessaging(program);
   registerTake(program);
+  registerWorker(program);
   registerStatus(program);
   registerMetrics(program);
   registerExplain(program);
