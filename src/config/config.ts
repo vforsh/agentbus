@@ -95,8 +95,9 @@ export function readConfigFile(path: string): Config {
 }
 
 export function writeConfigFile(path: string, config: Config): void {
-  const parsed = ConfigSchema.parse(config);
-  writeFileAtomic(path, JSON.stringify(parsed, null, 2) + "\n");
+  const parsed = ConfigSchema.safeParse(config);
+  if (!parsed.success) throw usageError(`Invalid config value: ${z.prettifyError(parsed.error)}`, { path });
+  writeFileAtomic(path, JSON.stringify(parsed.data, null, 2) + "\n");
 }
 
 export const shellQuote = (s: string): string =>
