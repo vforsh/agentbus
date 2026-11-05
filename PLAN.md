@@ -808,3 +808,12 @@ select delegation cohorts by opening-time bounds, project, direction and worker 
 aggregates, R-7 percentiles, duration and first-question-answer latency. Delivery-only intervals exclude
 ack-inferred and historical unknown seen; compatibility seen intervals retain the recorded timestamps.
 docs/metrics.md defines cohort/timezone/watcher semantics and the versioned output fields.
+
+## Worker verbs and default keys (2026-11-03)
+
+Workers no longer assemble the protocol by hand. `ask` posts a question and waits on the request for any
+unacknowledged parent mail (including mail the doorbell already marked seen), printing and acknowledging it;
+its receipt carries the wait origin, so the Claude turn it wakes stays attributed. `finish` publishes the one
+result and, for a success, shows unhandled parent mail in full instead of refusing by ID. `reply` derives a
+key when none is given: one per result, one per question ordinal, intent-hashed for progress and answers.
+The contract uses these verbs; no schema change.

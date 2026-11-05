@@ -5,132 +5,83 @@ description: Use the agentbus CLI to delegate work between Codex and Claude Code
 
 # agentbus
 
-Local, durable mailbox between agent sessions. One OS user, one host; identities are routing labels, not authentication. The mailbox is the record: a committed message survives crashes until it is acknowledged.
+Durable local mailbox between agent sessions. One OS user, one host; identities are routing labels, not authentication. A committed message survives crashes until it is acknowledged.
 
 ## Core rules
 
-- **Acceptance is explicit.** Default `read`, `show <id>` and `read --unseen` change nothing. `read --mark-seen`, `wait` and the Claude worker doorbell mark only their delivered page as *seen*, recording its source; this does not prove the output was consumed. `ack` accepts responsibility; `reply` also acks its source atomically (`--no-ack` opts out). Failed replies do not ack. `read --ack` accepts only its returned page before stdout; use it only when accepting the batch, since lost output still leaves it acknowledged (recover with `read --all` or `show`).
-- **Follow-ups gate success.** A worker's `success` result is refused (exit 5, `followups_pending`) while any follow-up or answer from its parent is unacknowledged; seen is not handled. Other outcomes are accepted and list the leftovers as `unhandledFollowUps`.
-- **A delegation's end settles leftovers.** A result settles the worker's unacked mail of that delegation and the parent's progress from it (the result supersedes progress); `close` (never gated) settles the whole delegation, both sides. Settled receipts read as acknowledged with `settledReason` (`delegation_done|delegation_closed`). The result itself stays yours to ack.
-- **Recover on every wake.** At startup and after every wait exit (message, timeout exit 3, error, kill), recover before handling new output or re-arming: as a parent collecting results, `agentbus take` is that sweep; otherwise run a paginated `agentbus read --mark-seen` sweep (follow the More messages pointer with `--after <cursor>`) before handling new output or re-arming. Bodies are readable; `show <id>` prints one full body. Keep `--json` for scripts (`hasMore`/`cursor`). Seen-but-unacked mail may be handled twice; give side effects their own `--key`.
-- **Retry with keys.** Automated sends/replies/delegations pass a stable `--key`; a retry returns the original IDs, a changed intent fails with exit 5. A keyed `delegate` retry never authorizes a second model launch.
-- **Outcomes come only from `result`.** A finished turn (`notice/turn_finished`) is not success. Only a worker `result` carries `success|blocked|failed|unknown`, and every result closes the delegation.
-- **Unknown stays unknown.** `tracking_lost` / phase `unknown` means evidence is missing, not that the worker stopped. Never take over a worker's files while it is `working`, `unknown` or has background work.
-- **Bodies come from files or stdin** (`--file path` or `--file -`), never argv. Max 1 MiB. Summaries are one line, ≤200 chars.
+- **Acceptance is explicit.** Plain `read` and `show <id>` change nothing. `wait`, `read --mark-seen` and the Claude doorbell mark their page *seen*, which does not mean handled. `ack` accepts; `reply` acks its source in the same commit (`--no-ack` opts out). `take` and `ask` acknowledge what they print, committing before output; lost output is recoverable with `read --all` or `show <id>`.
+- **Recover on every wake.** After every wait exit (mail, timeout exit 3, error, kill), sweep before handling new output or re-arming: `agentbus take` as a parent, otherwise a paginated `read --mark-seen` (follow `--after <cursor>`).
+- **Keys.** `reply` keys itself: one result per delegation, one key per question, and identical progress or answers collapse. Pass a stable `--key` to automated `send`, `followup` and `delegate`; a retry returns the original IDs, changed intent fails with exit 5, and a keyed `delegate` retry never authorizes a second launch. Seen-but-unacked mail may be handled twice, so give side effects their own keys.
+- **Outcomes come only from a result.** `notice/turn_finished` is not success. Every result (`success|blocked|failed|unknown`) closes the delegation. A `success` is refused (exit 5, `followups_pending`) while parent follow-ups or answers are unacknowledged.
+- **A delegation's end settles leftovers.** A result settles the worker's unacked mail and the parent's progress from it; `close` settles both sides. Settled receipts carry `settledReason`. The result itself stays the parent's to ack.
+- **Unknown stays unknown.** Phase `unknown` or `tracking_lost` means missing evidence, not a stopped worker. Never take over a worker's files while it is `working`, `unknown` or has background work.
+- **Bodies come from files or stdin** (`--file path|-`), never argv; at most 1 MiB. Summaries: one line, ≤200 chars.
 
-## Identity
+Caller identity: `--as` → `AGENTBUS_SESSION_ID` → `CLAUDE_CODE_SESSION_ID` (`claude:<uuid>`) or `CODEX_THREAD_ID` (`codex:<uuid>`); both native markers present → exit 5, pass `--as`. `agentbus whoami` shows the result. Names are display only.
 
-Caller resolution: `--as <address>` → `AGENTBUS_SESSION_ID` → native `CLAUDE_CODE_SESSION_ID` (`claude:<uuid>`) or `CODEX_THREAD_ID` (`codex:<uuid>`). Both native markers present → exit 5; pass `--as`. Addresses are internal UUIDs or `provider:<native-uuid>`; names are display only. `agentbus whoami` shows what resolved.
+## As a worker
+
+Your prompt carries an `<agentbus-contract>` block: follow it exactly, running every command through the single executable it names (safe in a shell variable; never put the multi-word fallback in one). In short: `read` and `ack` the request; `ask` the parent for decisions (Claude: in the background, then end the turn; it wakes you with the answer, and re-running never posts twice); `finish --outcome …` publishes your one result and, for a success, shows any unhandled parent mail instead (handle, `ack`, run it again). Never message the parent through provider-native channels; provider permission prompts belong to the user.
 
 ## As a parent
 
 **Own the return, not just the launch.** Infer the mode from the requested deliverable:
 
-- **Await (default for a consultation, review, draft or implementation):** bring the verified result back
-  here, even when it runs in a new session. A launch receipt is progress, not completion.
-- **Notify:** background work with a later return. Establish the supported wake path before ending the
-  turn; reuse the existing watcher/heartbeat. If unavailable, keep waiting in-turn or report the limitation.
-- **Handoff:** the user explicitly wants only a launched session or to continue there. Report access and
-  ownership; do not promise a later answer here. A new session alone does not cancel a requested answer.
-
-For a Codex parent's await mode, run `agentbus take` (see below), handle what it shows, then run
-`agentbus wait --replace --timeout 60s --probe 60s --json` while the requested work remains open. Continue
-the same tool process in bounded calls, recovering after every exit and paginating each sweep. Keep the
-turn open; a timeout never changes await into handoff or schedules a wake. Questions need a reply, not
-just ack; `turn_finished` is not a result. Verify/integrate the deliverable before the final answer.
-The heartbeat workflow below is for notify mode; a Claude parent uses its background wait for return.
+- **Await** (default for a consultation, review, draft or implementation): bring the verified result back here, even from a new session. A launch receipt is progress, not completion.
+- **Notify:** background work with a later return. Establish the wake path before ending the turn (reuse an existing watcher or heartbeat); if none exists, keep waiting in-turn or report the limitation.
+- **Handoff:** only when the user explicitly wants just a launched session. Report access and ownership; promise no later answer.
 
 ```bash
 agentbus init --json                                         # once per machine; idempotent
 agentbus session register --provider claude --external-id "$CLAUDE_CODE_SESSION_ID" --name lead --json
 agentbus delegate --to codex --name executor --cwd /abs/project --key task-001 \
   --label model=gpt-6-sol --summary "Fix the parser" --file request.md --json
-# -> workerId, requestId, contract, returnPath, returnPathStatus (ready only while your watcher runs)
+# -> workerId, requestId, contract, returnPath, returnPathStatus
 ```
 
-Launchers (`claude-to-codex`, `codex-to-claude`, `claude-threads`) append `contract` to the worker prompt (a worker directory the launcher creates later, such as a `claude --worktree`, is delegated with `--allow-missing-cwd`), spawn the worker (Claude workers with `--settings <claudeSettings>`), then confirm with `agentbus session bind <workerId> --external-id <native-uuid>`. Do not spawn twice for one request; a crash after spawning needs reconciliation, not a second launch.
+Launchers (`claude-to-codex`, `codex-to-claude`, `claude-threads`) append `contract` to the worker prompt, spawn the worker (Claude workers with `--settings <claudeSettings>`; a directory created later, such as `claude --worktree`, needs `--allow-missing-cwd`), then confirm with `agentbus session bind <workerId> --external-id <native-uuid>`. Never spawn twice for one request; a crash after spawning needs reconciliation, not a second launch.
 
-**Claude parent — one background wait for everything.** After delegating, run as a background command and end the turn:
+**Collect with `agentbus take [<request|name>]`.** It prints your delegations' new mail grouped per delegation (result and messages in full, unanswered questions, notices, latest progress), acknowledges all of it except questions, and ends with `Next:` steps, including whether to re-arm. `--peek` acknowledges nothing. Prefer it to `read` + `ack` pipelines.
 
-```bash
-agentbus wait --ensure --timeout 30m --probe 60s --json
-```
+**Answer** with `agentbus reply <question-id> --file -`; it also acks the question (acking alone answers nothing). The worker must ack the answer before `success`. Answers or follow-ups after the delegation ended are refused (exit 5).
 
-It covers every delegation of this parent, including ones created later. `--ensure` returns at once with `reason: already_watched` (exit 0) when a live wait of this session already covers its mail — an earlier background wait or a mod such as agentbus-threads that owns the watcher: end the turn, that wait wakes you. On each re-invocation run `agentbus take`, handle what it shows (answer questions with `reply`), and follow its `Next:` lines — they say whether to re-arm. Exactly one watcher per session: `--ensure` never retires another; `--replace` does (use it for an `owner_lost` watcher), and a wake with `reason: superseded` means a newer watcher is running — handle nothing and do not re-arm. Subagents share the session's identity, so only the conversation itself arms the watcher.
+**Follow up** with `agentbus followup <request|name> --summary … --file -`; exit 5 `delegation_closed` means nothing was filed. Use `followup`, not `send`: after the delegation ends, `send` silently becomes an unrelated message. A running Claude worker gets it after its next tool call or when it tries to stop (doorbell); a Codex worker checks at milestones and before its result. An idle worker is not woken: Claude parents nudge with `SendMessage`; Codex parents resume through the launcher (`spawn.sh --resume <threadId>`), never while its run is active or after Desktop may own it.
 
-**Collecting mail: `agentbus take [<request|name>]`.** One call returns your delegations' new mail grouped per delegation: the result and messages in full, unanswered questions (left unacknowledged — `reply` acks them), notices, and the latest progress while no result exists. It acknowledges everything it printed except questions, and ends with `Next:` steps (questions to answer, whether a live wait still covers open delegations). `--peek` acknowledges nothing; `--json` returns `delegations[]` (`result`, `questions`, `messages`, `notices`, `progress`), `acknowledged`, `next`. Prefer it over `read --json` + `ack` pipelines; lost output is recoverable with `read --all` or `show <id>`.
+**Claude parent: one background wait.** After delegating, run `agentbus wait --ensure --timeout 30m --probe 60s --json` as a background command and end the turn. It covers every delegation of this session, including later ones. `reason: already_watched` means another live wait (an earlier one, or the agentbus-threads mod) wakes you: just end the turn. On each wake run `take` and follow `Next:`. One watcher per session: `--replace` retires the others (use it for `owner_lost`); a wake with `reason: superseded` means do nothing and do not re-arm. Subagents share the identity, so only the conversation arms the watcher.
 
-Readiness is derived from the running watcher, not recorded: `returnPathStatus` is `ready` (`returnReadiness.readiness: armed`) only while an unfiltered wait of yours is running and the process that armed it still exists. `not_armed` (timed out, returned, interrupted, killed), `owner_lost` (the wait outlived the session that armed it; `--replace` retires it) and `unverified`/`unknown` (no process evidence) all mean re-arm before relying on wake-ups. A `--correlation` wait covers one request, a `--settled` wait only the delegations open when armed, and a `--from`/`--type` wait none.
+**Codex parent, await mode:** `take`, handle, then `agentbus wait --replace --timeout 60s --probe 60s --json` in bounded calls while work is open, recovering after every exit. A timeout never turns await into handoff.
 
-**Codex parent — heartbeat (notify mode).** If the app's automation tool exists and monitoring is in scope, create or reuse one heartbeat on the original chat. Persist its ID, original native thread ID, state/config paths and static recovery prompt before ending the turn. Record a heartbeat binding with `status: setup_required` while awaiting its first check-in; creation alone proves configuration, not that a run happened. Reconcile a saved ID through the supported app tool before creating another heartbeat. The observed `view` API renders a card without metadata: a read-only snapshot of its documented automation config can corroborate target, kind, status and prompt, but cannot prove scheduling or restart survival. Never edit app-owned files. Missing/deleted/paused/mismatched evidence means `setup_required` or `unsupported`, not a fresh ready report.
+**Codex parent, notify mode (heartbeat).** If the app's automation tool exists and monitoring is in scope:
+- Create or reuse one heartbeat on the original chat; reconcile a saved ID through the app tool before creating another. Persist its ID, the native thread ID, state/config paths and a static recovery prompt before ending the turn. Never edit app-owned files.
+- Record the binding as `status: setup_required` until the first check-in; creation proves configuration, not a run. Missing, paused or mismatched evidence means `setup_required` or `unsupported`, never `ready`.
+- Each run verifies it is the original chat (`CODEX_THREAD_ID`; a hardcoded `--as` is not evidence), reconciles the heartbeat, records `ready` with ID and cadence on the first check-in, then `session update codex:<thread> --refresh`. Sweep `read --mark-seen --json` from the beginning, paginating only within the sweep (not `take`: a run dying after its ack loses mail; not `--unseen` or a saved cursor). Handle and ack, key side effects, and stay quiet without changes. A check-in older than three intervals (15 min default) reads as `stale`.
+- After every delegation is closed and handled, delete the saved heartbeat, keep the receipt and record `{"strategy":"heartbeat","status":"setup_required","handle":null}` via `--binding-file -`; cleanup is safe to repeat. Without automation tools record `"status":"unsupported"` and poll with `read`. Restart survival is unverified ([restart workflow](../../docs/heartbeat-restart.md)).
 
-Each run first verifies it is the original chat (`CODEX_THREAD_ID` when available, otherwise supported original-chat evidence; a hardcoded `--as` is not identity evidence), reconciles that same active heartbeat and its target, then records `status: ready` with its ID and cadence on the first successful check-in. Later valid runs use `agentbus session update codex:<thread> --refresh`. Always sweep `agentbus read --mark-seen --json` from the beginning (not `take`: a run that dies after acknowledging would lose the mail it had not handled yet), paginating with a cursor only inside that sweep; `--unseen` or a saved cursor loses recovery mail. Handle and ack questions/results/notices, give side effects their own stable message keys, optionally use a short `wait --timeout 2m`, and stay quiet without meaningful changes. Freshness is a parent report, not app liveness: a check-in older than three intervals (15 minutes without `interval`) reads as `stale`/`unknown`.
+**Readiness** comes from the running watcher: `ready`/`armed` only while an unfiltered wait of yours runs and its arming process exists. `not_armed`, `owner_lost` and `unverified`/`unknown` all mean re-arm. A `--correlation` wait covers one request, `--settled` the delegations open when armed, `--from`/`--type` none.
 
-Delete only the saved heartbeat after every delegation is closed and outstanding messages/actions are handled. Retain the deletion receipt and immediately record `{"strategy":"heartbeat","status":"setup_required","handle":null}` through `--binding-file -`; repeat cleanup safely after an interruption. Without automation tools, record `"status":"unsupported"`, report manual delivery and poll with `agentbus read`. Local scheduled work needs the app running; missed-run catch-up and restart resumption remain unverified until the opt-in [restart workflow](../../docs/heartbeat-restart.md) has genuinely observed them. A successful CLI/fixture restart does not pass that gate.
+**Batches:** `agentbus wait --settled --replace --timeout 30m --json` returns `attention` at once for questions and permission/failure/interruption/tracking-loss/launch-failure notices, `settled` when all members are done, closed or idle, `empty` if none were open. Handle attention before re-arming.
 
-**Batches.** `agentbus wait --settled --replace --timeout 30m --json` snapshots currently open delegations: returns `reason: attention` immediately for questions and permission/failure/interruption/tracking-loss/launch-failure notices, `reason: settled` when every member is done/closed/idle, `reason: empty` if none were open. Answer attention items before re-arming.
-
-**Follow-ups to a working worker.** `agentbus followup <request|name> --summary "..." --file -` (add `--key` when automated). It joins the delegation, and the worker cannot publish a `success` result until it acknowledges it. Exit 5 `delegation_closed` means the worker already finished or you closed it: nothing was filed; start a new request if the work must continue. Plain `send` to the worker still joins an open delegation, but after it ends it silently becomes an unrelated message — use `followup`. A running Claude worker sees it after its next tool call, or its attempt to end the turn is turned back until it reads it (doorbell hook). A Codex worker checks at milestones and before its result. An idle worker (turn ended, no wait armed) is not woken: Claude parents use `SendMessage` as the doorbell; a Codex parent waits for the result or resumes per the launcher.
-
-**Answering a question.** `agentbus reply <question-id> --key answer-<question-id> --file answer.md`. A successful reply also acknowledges the question (`--no-ack` opts out). Acking a question does not answer it. An answer is a follow-up: the worker must ack it before `success`, and answering after the delegation ended is refused (exit 5). Claude workers wake through their own background wait; for a Codex worker whose run ended, resume the same thread through the launcher (`spawn.sh --resume <threadId>`), never while its run is active or after Desktop may own it.
-
-**Status.** `agentbus delegations` (add `--probe` for live activity, `--all` for history, `<request-id|name>` for detail, `--global` for every parent's delegations without a caller identity). `agentbus explain <request|name>` tells one delegation's story: timeline of mail (summaries only), lifecycle evidence, binding changes and waits, why it is where it is, what is uncertain, and numbered next steps with commands (`--probe` checks liveness first; `--limit` bounds the timeline, newest kept). It changes nothing. `agentbus close <request>` abandons a delegation without a result (never stops a process).
+**Status:** `agentbus delegations` (`--probe` live activity, `--all` history, `--global` every parent). `agentbus explain <request|name>` gives the timeline, evidence, uncertainty and numbered next steps; it changes nothing. `agentbus close <request>` abandons a delegation without a result and stops no process. Retrospective delivery metrics: `agentbus metrics --global --since 14d --group-by direction` ([docs/metrics.md](../../docs/metrics.md)).
 
 | Phase | Meaning | Parent action |
 | --- | --- | --- |
-| `pending` | Not launched/claimed yet, or an answer awaits a new worker turn | Wait |
+| `pending` | Not launched or claimed yet, or an answer awaits a new worker turn | Wait |
 | `working` | Bound turn active, or its background work still running | Wait |
-| `permission` | Worker hit a provider permission prompt (last known) | Tell the user; the prompt belongs to them |
-| `question` | Worker asked; unresolved until you reply to that question ID | Answer |
+| `permission` | Worker hit a provider permission prompt (last known) | Tell the user; the prompt is theirs |
+| `question` | Unresolved until you reply to that question ID | Answer |
 | `idle` | Turn ended without a result | Read the `turn_finished` notice; follow up or close |
-| `interrupted` | Latest turn failed or its process positively died, or the session ended before claiming the request (`launch_failed` notice: read its body for the cause) | Decide: retry with a fresh request or close |
-| `unknown` | Tracking lost, binding superseded by manual input, or the worker's owner restarted and orphaned its background wait | Investigate (`agentbus explain <request>`); do not take over files. Restarted owner: nudge the worker through its provider (Claude: `SendMessage`) to run its contract's read command |
-| `done` | Worker published a result (outcome shown) | Verify the worker is idle before editing its files |
+| `interrupted` | Turn failed, process died, or session ended before claiming (`launch_failed`: read its body) | Retry with a fresh request, or close |
+| `unknown` | Tracking lost, binding superseded, or the owner restarted and orphaned its wait | `explain`; never take over files. Restarted owner: nudge the worker (Claude: `SendMessage`) to run its read command |
+| `done` | Result published (outcome shown) | Verify the worker is idle before editing its files |
 | `closed` | Closed by the parent | — |
-
-## Delivery metrics
-
-`agentbus metrics --global --since 14d --group-by direction --json` reports a read-only retrospective.
-Bounds select delegations by opening time (`--since` inclusive, `--until` exclusive); their later results
-and answers remain included. ISO timestamps need a timezone; date-only bounds are UTC. `--project`
-selects the worker checkout and descendants; `--direction parent:worker`, `--model`, repeatable
-`--label k=v` intersect filters. Group by `project`, `direction`, `model` or `label:<key>`; absent labels
-form a null group. Task kinds require an explicit label, not inference from names.
-
-`data.metricsVersion: 2`: delegation duration, result publication→seen→ack, delivery-only intervals,
-first-answer latency for questions, p50/p90/p95 (R-7), active backlogs and local wait evidence. Delivery
-sources (`seenSource` in envelopes) distinguish wait/doorbell/`read --mark-seen` from ack-inferred seen.
-Ordinary `read` stays non-mutating. Historical source is unknown; delivery-only intervals count those
-samples as `unobserved`, never zero. Recording delivery before output does not prove consumption.
-Ack alone does not answer a question; terminal settlement is not a handled follow-up or answered question.
-
-The report never drains hooks, changes receipts or probes providers. Default scope is all retained
-children of the caller as parent; `--global` needs no caller. Filtered watcher counts cover waits matching
-and overlapping the selected cohort; broad waits count once. Liveness requires PID/start evidence;
-expiry alone never proves death. Heartbeat freshness/readiness remain in `delegations`/`explain`.
-See [docs/metrics.md](../../docs/metrics.md) for field and TSV definitions.
-
-## As a worker
-
-Your prompt carries an `<agentbus-contract version="1">` block. Follow it exactly. Run every command through the executable it names (`<state-dir>/workers/<worker-id>/agentbus`), which fixes the CLI, store paths and `--as`; it is one path, so keeping it in a shell variable is safe. Never put the multi-word fallback prefix in a variable: zsh and fish do not word-split it (exit 127). In short:
-
-1. `read --correlation <request-id> --json`, then `ack <request-id>`.
-2. Optional `reply <request-id> --type progress --summary ...` at real milestones only.
-3. Decision or blocker within the task's authorization → `reply <request-id> --type question --key q1-... --summary ... --file -`; one open question at a time. Recover an already-arrived answer with `read` before waiting. Claude: arm `wait --replace --correlation <request-id> --timeout 30m --json` as a background command and end the turn; on every re-invocation recover, ack, re-arm if still waiting. Codex: bounded in-turn `wait`, or end the turn.
-4. Run the step-1 `read` once more, handle and ack any follow-up, finish all writes and background edits, then `reply <request-id> --type result --outcome <success|blocked|failed|unknown> --key result-... --summary ... --file -` and end the turn promptly. `blocked` hands the task back. A `success` refused with `followups_pending` names the unacknowledged messages: handle and ack them, then retry with the same key.
-5. Follow-ups from the parent can arrive mid-task. Claude: an `Agentbus: your parent sent …` note appears after a tool call or when you try to stop; run the commands it names (`read --from <parent>`, then `ack`). Codex: check with the step-1 `read` at milestones. Handle them within the task.
-6. Never message the parent through provider-native channels. Provider permission prompts still belong to the user.
 
 ## Setup and diagnostics
 
-- Install/upgrade the worker-facing executable with `agentbus upgrade` from the npm package, or `bun run upgrade` from a checkout (`install:bin` is an alias). It builds and smoke-tests a compiled candidate, backs up/migrates the selected store and replaces the executable. Run offline: stop Agentbus users and watchers first; open delegations, live/unverified waits, queued hook events and newer schemas are refused. Only the selected store is checked. Do not close real work to bypass this gate. Background Claude sessions may be unable to read external volumes, so keep the executable on the internal disk.
-- `bun run gate` includes the compiled release checks; `bun run release:check` only builds and smoke-tests without installing or launching models. `agentbus build-info --json` reports embedded commit, source fingerprint and supported schema. Backups and interrupted-upgrade recovery are documented in docs/install.md.
-- `agentbus doctor` — read-only readiness (build identity/source freshness, store schema, spool backlog, hook installation and pinned store, provider CLIs, caller, and the caller's return path for its open delegations).
-- Claude workers are observed through per-worker hooks: start them with `claude --bg --settings <claudeSettings>` from the `delegate` receipt. The same hooks ring the follow-up doorbell (`PostToolUse`, `Stop`). After a Desktop handoff only explicit replies and `--probe` remain. `agentbus hooks claude install|uninstall|status|print [--dry-run]` manages an optional user-level install that also covers handed-off sessions but runs in every Claude session.
-- `agentbus config set codexBin=/path claudeBin=/path`, `config get|unset|import|export|path|ls`.
-- `agentbus status [<session>] [--probe]`, `agentbus event drain`.
-- `agentbus prune [--older-than 7d] [--dry-run]` — store maintenance: deletes `delegate`-created workers that finished and went quiet before the cutoff, with their history; never registered sessions or a parent's unacknowledged mail.
+- `agentbus upgrade` (npm) or `bun run upgrade` (checkout) builds, smoke-tests and installs the worker executable on the internal disk, backing up and migrating the store. Offline only: open delegations, live waits, queued hook events and newer schemas are refused; never close real work to get past it. `build-info --json` shows the embedded commit and schema.
+- `agentbus doctor`: read-only readiness (build freshness, schema, spool, hooks, provider CLIs, caller, return path).
+- Claude workers are observed through per-worker hooks (`claude --bg --settings <claudeSettings>`), which also ring the doorbell. `agentbus hooks claude install|uninstall|status|print` manages an optional user-level install that also covers handed-off sessions.
+- `agentbus config set codexBin=… claudeBin=…`; `status [--probe]`; `event drain`; `prune [--older-than 7d] [--dry-run]` deletes finished, quiet `delegate`-created workers (never registered sessions or unacked parent mail).
 
 ## Exit codes
 
-`0` ok · `1` failure / doctor not ready · `2` invalid usage or input · `3` wait timed out (still run the recovery read) · `4` not found (session, message, store) · `5` conflict: retry key, ambiguous identity, wrong role, closed delegation, unacknowledged follow-ups, busy worker · `6` database busy past deadline · `130` interrupted. With `--json`, failures are `{"ok":false,"error":{code,message,exitCode,details}}` on stdout.
+`0` ok · `1` failure / doctor not ready · `2` invalid usage · `3` wait or ask timed out (still recover) · `4` not found · `5` conflict (key, identity, role, closed delegation, `followups_pending`, open question, busy worker) · `6` database busy · `130` interrupted. With `--json`, failures are `{"ok":false,"error":{code,message,exitCode,details}}` on stdout.
