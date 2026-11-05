@@ -25,7 +25,9 @@ absolute path. `--direction` is `parent:worker`; `--model` is shorthand for the 
 Repeat `--label k=v` to intersect labels. Task kinds are explicit labels, not guesses from task names;
 old delegations without that label do not match it.
 
-Default scope is all retained delegations of the caller **as parent**. `--global` skips caller resolution.
+Default scope is all retained delegations of the caller **as parent**. `--global` skips caller resolution. With no
+caller identity, or a native Claude/Codex session that never registered, metrics warn on stderr and report the
+global scope instead of failing; an explicit `--as` or `AGENTBUS_SESSION_ID` must still resolve.
 Unrelated inbox mail is excluded. `--group-by project|direction|model|label:<key>` adds `groups` with the
 same delegation/result/question/follow-up aggregates; missing labels form a null group. Root aggregates
 always describe the whole selection. Pruning removes history. Empty selections return zero counts,

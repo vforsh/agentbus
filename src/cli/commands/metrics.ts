@@ -1,10 +1,11 @@
 import type { Command } from "commander";
-import { requireCaller } from "../../services/caller.ts";
+import { requireCaller, resolveCallerRef } from "../../services/caller.ts";
 import { collectMetrics, type Metrics } from "../../services/metrics.ts";
 import { type MetricsOptions, metricsFilter } from "../../services/metrics-filter.ts";
-import { openStore } from "../../store/db.ts";
+import { type Db, openStore } from "../../store/db.ts";
+import { resolveAddress } from "../../store/sessions.ts";
 import { action } from "../action.ts";
-import { collect } from "../context.ts";
+import { type Ctx, collect } from "../context.ts";
 
 const LATENCY_INTERVALS = [
   "commitToSeen",
@@ -40,7 +41,7 @@ export function registerMetrics(program: Command): void {
         const filter = metricsFilter(opts);
         const db = openStore(ctx.paths, { readonly: true });
         try {
-          const parentId = opts.global ? null : requireCaller(db, ctx.opts.as).session.id;
+          const parentId = opts.global ? null : parentScope(ctx, db);
           const metrics = collectMetrics(db, parentId, filter);
           ctx.emit(
             metrics,
@@ -52,6 +53,21 @@ export function registerMetrics(program: Command): void {
         }
       }),
     );
+}
+
+/**
+ * Metrics only read, so a session with no identity, or a native one that never registered, gets the global view
+ * instead of an error. An explicit `--as` or AGENTBUS_SESSION_ID must still resolve.
+ */
+function parentScope(ctx: Ctx, db: Db): string | null {
+  const ref = resolveCallerRef(ctx.opts.as);
+  let reason: string | null = null;
+  if (!ref) reason = "no caller identity";
+  else if (ref.source === "native" && !resolveAddress(db, ref.address))
+    reason = `caller ${ref.address} is not registered`;
+  if (reason === null) return requireCaller(db, ctx.opts.as).session.id;
+  ctx.warn(`${reason}; showing every parent's delegations (--global)`);
+  return null;
 }
 
 function plain(m: Metrics): string[] {

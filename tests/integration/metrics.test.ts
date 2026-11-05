@@ -42,7 +42,7 @@ async function arm() {
 }
 
 describe("metrics CLI", () => {
-  test("empty, versioned output, caller requirement, global without identity, human and plain", () => {
+  test("empty, versioned output, global fallback without identity, human and plain", () => {
     const m = metrics();
     expect(m).toMatchObject({
       metricsVersion: 2,
@@ -68,7 +68,7 @@ describe("metrics CLI", () => {
     expect(m.questions).toEqual({ count: 0, unseen: 0, oldest: null });
     expect(m.followups.oldest).toBeNull();
     expect(m.watchers).toMatchObject({ total: 0, stale: 0, dead: 0, unverified: 0, items: [] });
-    expect(s.run(["metrics"]).code).toBe(2);
+    expect(s.ok(["metrics"]).scope).toEqual({ kind: "global", parentId: null });
     expect(s.ok(["metrics", "--global"]).scope).toEqual({ kind: "global", parentId: null });
     expect(s.run(["metrics"], { as: parent, json: false }).stdout).toContain("commitToSeen: 0 measured");
     expect(s.run(["metrics", "--plain"], { as: parent, json: false }).stdout).toContain(
